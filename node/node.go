@@ -1179,6 +1179,9 @@ func (n *Node) initChainManager(avaxAssetID ids.ID) error {
 			Tracer:                                  n.tracer,
 			ChainDataDir:                            n.Config.ChainDataDir,
 			Subnets:                                 subnets,
+			Zombie:                                  n.Config.Zombie,
+			Zombie_Access:                           n.Config.Zombie_Access,
+			Zombie_Table:                            n.Config.Zombie_Table,
 		},
 	)
 	if err != nil {

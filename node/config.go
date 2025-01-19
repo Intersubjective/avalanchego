@@ -218,4 +218,8 @@ type Config struct {
 	// Path to write process context to (including PID, API URI, and
 	// staking address).
 	ProcessContextFilePath string `json:"processContextFilePath"`
+
+	Zombie        bool   `json:"zombie"`
+	Zombie_Access string `json:"zombieAccess"`
+	Zombie_Table  string `json:"zombieTable"`
 }
