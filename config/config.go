@@ -901,7 +901,7 @@ func getDatabaseConfig(v *viper.Viper, networkID uint32) (node.DatabaseConfig, e
 
 	return node.DatabaseConfig{
 		Name:     v.GetString(DBTypeKey),
-		ReadOnly: v.GetBool(DBReadOnlyKey),
+		ReadOnly: v.GetBool(ZombieKey) || v.GetBool(DBReadOnlyKey),
 		Path: filepath.Join(
 			GetExpandedArg(v, DBPathKey),
 			constants.NetworkName(networkID),
@@ -1472,6 +1472,12 @@ func GetNodeConfig(v *viper.Viper) (node.Config, error) {
 	nodeConfig.ProcessContextFilePath = GetExpandedArg(v, ProcessContextFileKey)
 
 	nodeConfig.ProvidedFlags = providedFlags(v)
+
+	nodeConfig.Zombie = v.GetBool(ZombieKey)
+	nodeConfig.Zombie_Access = v.GetString(ZombieAccessKey)
+	nodeConfig.Zombie_Table = v.GetString(ZombieTableKey)
+	nodeConfig.Zombie_Request = v.GetString(ZombieRequestKey)
+
 	return nodeConfig, nil
 }
 

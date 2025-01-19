@@ -43,4 +43,9 @@ type Config struct {
 	Bootstrapped func()
 
 	ShouldHalt func() bool
+
+	Zombie         bool
+	Zombie_Access  string
+	Zombie_Table   string
+	Zombie_Request string
 }

@@ -216,4 +216,9 @@ const (
 	TracingExporterTypeKey                             = "tracing-exporter-type"
 	TracingHeadersKey                                  = "tracing-headers"
 	ProcessContextFileKey                              = "process-context-file"
+
+	ZombieKey        = "zombie"
+	ZombieAccessKey  = "zombie-access"
+	ZombieTableKey   = "zombie-table"
+	ZombieRequestKey = "zombie-request"
 )

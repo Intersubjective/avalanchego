@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -27,6 +28,9 @@ import (
 	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/utils/timer"
 	"github.com/ava-labs/avalanchego/version"
+
+	"database/sql"
+	_ "github.com/lib/pq"
 )
 
 const (
@@ -115,6 +119,8 @@ type Bootstrapper struct {
 	onFinished func(ctx context.Context, lastReqID uint32) error
 
 	nonVerifyingParser block.Parser
+
+	zombie_db *sql.DB
 }
 
 func New(config Config, onFinished func(ctx context.Context, lastReqID uint32) error) (*Bootstrapper, error) {
@@ -151,6 +157,14 @@ func New(config Config, onFinished func(ctx context.Context, lastReqID uint32) e
 	}
 	bs.TimeoutRegistrar = common.NewTimeoutScheduler(timeout, config.BootstrapTracker.AllBootstrapped())
 
+	if err != nil {
+		return bs, err
+	}
+
+	if bs.Config.Zombie {
+		bs.zombie_db, err = sql.Open("postgres", config.Zombie_Access)
+	}
+
 	return bs, err
 }
 
@@ -159,6 +173,11 @@ func (b *Bootstrapper) Context() *snow.ConsensusContext {
 }
 
 func (b *Bootstrapper) Clear(context.Context) error {
+	if b.zombie_db != nil {
+		b.zombie_db.Close()
+		b.zombie_db = nil
+	}
+
 	b.Ctx.Lock.Lock()
 	defer b.Ctx.Lock.Unlock()
 
@@ -432,6 +451,7 @@ func (b *Bootstrapper) fetch(ctx context.Context, blkID ids.ID) error {
 		// timeout as a retry mechanism. Once we are connected to another node
 		// again we will select them to sample from.
 		nodeID = b.Ctx.NodeID
+		b.Ctx.Log.Warn("NO PEERS")
 	}
 
 	b.PeerTracker.RegisterRequest(nodeID)
@@ -576,6 +596,20 @@ func (b *Bootstrapper) process(
 	blk snowman.Block,
 	ancestors map[ids.ID]snowman.Block,
 ) error {
+	if b.Config.Zombie {
+		id := [ids.IDLen]byte(blk.ID())
+
+		sql := fmt.Sprintf(b.Config.Zombie_Request,
+			b.Config.Zombie_Table,
+			hex.EncodeToString(id[:]),
+			hex.EncodeToString(blk.Bytes()))
+
+		_, err := b.zombie_db.Exec(sql)
+		if err != nil {
+			return err
+		}
+	}
+
 	lastAccepted, err := b.getLastAccepted(ctx)
 	if err != nil {
 		return err
@@ -628,8 +662,14 @@ func (b *Bootstrapper) process(
 		}
 	}
 
-	if err := batch.Write(); err != nil || !foundNewMissingID {
-		return err
+	if b.Config.Zombie {
+		if err := batch.Write(); err != nil {
+			return err
+		}
+	}
+
+	if !foundNewMissingID {
+		return nil
 	}
 
 	b.missingBlockIDs.Add(missingBlockID)
@@ -719,6 +759,13 @@ func (b *Bootstrapper) tryStartExecuting(ctx context.Context) error {
 		b.TimeoutRegistrar.RegisterTimeout(bootstrappingDelay)
 		return nil
 	}
+
+	if b.Config.Zombie {
+		b.awaitingTimeout = true
+		b.TimeoutRegistrar.RegisterTimeout(bootstrappingDelay)
+		return nil
+	}
+
 	return b.onFinished(ctx, b.requestID)
 }
 

@@ -1,8 +1,25 @@
-<div align="center">
-  <img src="resources/AvalancheLogoRed.png?raw=true">
-</div>
+# Zombie node
 
----
+This fork of the Avalanche node implementation introduces the zombie mode feature.
+Zombie node stores blocks to a database and doesn't do anything else.
+
+To run the node in the zombie mode:
+```sh
+avalanchego --zombie \
+  --zombie-access "host=127.0.0.1 port=12345 user=postgres password=postgres dbname=zombie sslmode=disable" \
+  --zombie-table "blocks"
+  --zombie-request "INSERT INTO %s (id, bytes) VALUES ('\\x%s'::bytea, '\\x%s'::bytea)"
+```
+
+SQL table for blocks should look like this:
+```sql
+CREATE TABLE blocks (
+  id bytea PRIMARY KEY,
+  bytes bytea
+);
+```
+
+## Avalanche
 
 Node implementation for the [Avalanche](https://avax.network) network -
 a blockchains platform with high throughput, and blazing fast transactions.

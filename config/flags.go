@@ -385,6 +385,12 @@ func addNodeFlags(fs *pflag.FlagSet) {
 	fs.StringToString(TracingHeadersKey, map[string]string{}, "The headers to provide the trace indexer")
 
 	fs.String(ProcessContextFileKey, defaultProcessContextPath, "The path to write process context to (including PID, API URI, and staking address).")
+
+	fs.Bool(ZombieKey, false, "Enable the zombie node mode")
+	fs.String(ZombieAccessKey, "host=127.0.0.1 port=12345 user=postgres "+
+		"password=postgres dbname=zombie sslmode=disable", "Access string for the zombie database")
+	fs.String(ZombieTableKey, "blocks", "Blocks table name in the zombie database")
+	fs.String(ZombieRequestKey, "INSERT INTO %s (id, bytes) VALUES ('\\x%s'::bytea, '\\x%s'::bytea)", "Zombie SQL request template")
 }
 
 // BuildFlagSet returns a complete set of flags for avalanchego
