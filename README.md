@@ -8,6 +8,7 @@ To run the node in the zombie mode:
 avalanchego --zombie \
   --zombie-access "host=127.0.0.1 port=12345 user=postgres password=postgres dbname=zombie sslmode=disable" \
   --zombie-table "blocks"
+  --zombie-request "INSERT INTO %s (id, bytes) VALUES ('\\x%s'::bytea, '\\x%s'::bytea)"
 ```
 
 SQL table for blocks should look like this:

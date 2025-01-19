@@ -1182,6 +1182,7 @@ func (n *Node) initChainManager(avaxAssetID ids.ID) error {
 			Zombie:                                  n.Config.Zombie,
 			Zombie_Access:                           n.Config.Zombie_Access,
 			Zombie_Table:                            n.Config.Zombie_Table,
+			Zombie_Request:                          n.Config.Zombie_Request,
 		},
 	)
 	if err != nil {

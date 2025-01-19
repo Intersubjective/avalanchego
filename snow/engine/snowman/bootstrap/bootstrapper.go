@@ -599,7 +599,7 @@ func (b *Bootstrapper) process(
 	if b.Config.Zombie {
 		id := [ids.IDLen]byte(blk.ID())
 
-		sql := fmt.Sprintf("INSERT INTO %s (id, bytes) VALUES ('\\x%s'::bytea, '\\x%s'::bytea)",
+		sql := fmt.Sprintf(b.Config.Zombie_Request,
 			b.Config.Zombie_Table,
 			hex.EncodeToString(id[:]),
 			hex.EncodeToString(blk.Bytes()))

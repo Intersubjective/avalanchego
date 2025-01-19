@@ -390,6 +390,7 @@ func addNodeFlags(fs *pflag.FlagSet) {
 	fs.String(ZombieAccessKey, "host=127.0.0.1 port=12345 user=postgres "+
 		"password=postgres dbname=zombie sslmode=disable", "Access string for the zombie database")
 	fs.String(ZombieTableKey, "blocks", "Blocks table name in the zombie database")
+	fs.String(ZombieRequestKey, "INSERT INTO %s (id, bytes) VALUES ('\\x%s'::bytea, '\\x%s'::bytea)", "Zombie SQL request template")
 }
 
 // BuildFlagSet returns a complete set of flags for avalanchego

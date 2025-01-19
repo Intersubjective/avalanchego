@@ -1476,6 +1476,7 @@ func GetNodeConfig(v *viper.Viper) (node.Config, error) {
 	nodeConfig.Zombie = v.GetBool(ZombieKey)
 	nodeConfig.Zombie_Access = v.GetString(ZombieAccessKey)
 	nodeConfig.Zombie_Table = v.GetString(ZombieTableKey)
+	nodeConfig.Zombie_Request = v.GetString(ZombieRequestKey)
 
 	return nodeConfig, nil
 }

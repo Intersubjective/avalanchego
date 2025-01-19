@@ -245,9 +245,10 @@ type ManagerConfig struct {
 
 	Subnets *Subnets
 
-	Zombie        bool
-	Zombie_Access string
-	Zombie_Table  string
+	Zombie         bool
+	Zombie_Access  string
+	Zombie_Table   string
+	Zombie_Request string
 }
 
 type manager struct {
@@ -969,6 +970,7 @@ func (m *manager) createAvalancheChain(
 		Zombie:                         m.ManagerConfig.Zombie,
 		Zombie_Access:                  m.ManagerConfig.Zombie_Access,
 		Zombie_Table:                   m.ManagerConfig.Zombie_Table,
+		Zombie_Request:                 m.ManagerConfig.Zombie_Request,
 	}
 	var snowmanBootstrapper common.BootstrapableEngine
 	snowmanBootstrapper, err = smbootstrap.New(
@@ -1367,6 +1369,7 @@ func (m *manager) createSnowmanChain(
 		Zombie:                         m.ManagerConfig.Zombie,
 		Zombie_Access:                  m.ManagerConfig.Zombie_Access,
 		Zombie_Table:                   m.ManagerConfig.Zombie_Table,
+		Zombie_Request:                 m.ManagerConfig.Zombie_Request,
 	}
 	var bootstrapper common.BootstrapableEngine
 	bootstrapper, err = smbootstrap.New(

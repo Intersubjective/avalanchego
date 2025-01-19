@@ -219,7 +219,8 @@ type Config struct {
 	// staking address).
 	ProcessContextFilePath string `json:"processContextFilePath"`
 
-	Zombie        bool   `json:"zombie"`
-	Zombie_Access string `json:"zombieAccess"`
-	Zombie_Table  string `json:"zombieTable"`
+	Zombie         bool   `json:"zombie"`
+	Zombie_Access  string `json:"zombieAccess"`
+	Zombie_Table   string `json:"zombieTable"`
+	Zombie_Request string `json:"zombieRequest"`
 }
