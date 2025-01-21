@@ -662,7 +662,7 @@ func (b *Bootstrapper) process(
 		}
 	}
 
-	if b.Config.Zombie {
+	if !b.Config.Zombie {
 		if err := batch.Write(); err != nil {
 			return err
 		}
