@@ -4,6 +4,9 @@
 package peer
 
 import (
+	// "encoding/hex"
+	// "fmt"
+
 	"bufio"
 	"context"
 	"errors"
@@ -578,6 +581,8 @@ func (p *peer) writeMessage(writer io.Writer, msg message.OutboundMessage) {
 		zap.Stringer("nodeID", p.id),
 		zap.Binary("messageBytes", msgBytes),
 	)
+
+	// fmt.Printf(" * * * SEND * * * %d bytes\n%s\n", len(msgBytes), hex.EncodeToString(msgBytes))
 
 	if err := p.conn.SetWriteDeadline(p.nextTimeout()); err != nil {
 		p.Log.Verbo(failedToSetDeadlineLog,

@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	// "os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -337,6 +338,8 @@ func (n *network) Send(
 	// Note: It is guaranteed that namedPeers and sampledPeers are disjoint.
 	for _, peers := range [][]peer.Peer{namedPeers, sampledPeers} {
 		for _, peer := range peers {
+			// fmt.Printf(" * * * PEER * * * %s\n", peer.IP().AddrPort.String())
+			// os.Stdout.Sync()
 			if peer.Send(n.onCloseCtx, msg) {
 				sentTo.Add(peer.ID())
 

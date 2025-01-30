@@ -5,6 +5,7 @@ package peer
 
 import (
 	"crypto"
+	"fmt"
 	"net/netip"
 	"sync"
 
@@ -72,6 +73,7 @@ func (s *IPSigner) GetSignedIP() (*SignedIP, error) {
 		AddrPort:  ip,
 		Timestamp: s.clock.Unix(),
 	}
+	fmt.Printf(" * * * SIGN IP * * * %s\n", ip.String())
 	signedIP, err := unsignedIP.Sign(s.tlsSigner, s.blsSigner)
 	if err != nil {
 		return nil, err

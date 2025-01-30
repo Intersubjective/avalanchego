@@ -5,7 +5,6 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -30,6 +29,8 @@ import (
 	"github.com/ava-labs/avalanchego/version"
 
 	"database/sql"
+	// "github.com/ava-labs/avalanchego/utils/cb58"
+	"encoding/hex"
 	_ "github.com/lib/pq"
 )
 
@@ -120,7 +121,8 @@ type Bootstrapper struct {
 
 	nonVerifyingParser block.Parser
 
-	zombie_db *sql.DB
+	zombie_db     *sql.DB
+	zombie_height uint64
 }
 
 func New(config Config, onFinished func(ctx context.Context, lastReqID uint32) error) (*Bootstrapper, error) {
@@ -316,6 +318,12 @@ func (b *Bootstrapper) sendBootstrappingMessagesOrFinish(ctx context.Context) er
 	}
 
 	numAccepted := len(accepted)
+	for i := 0; i < numAccepted; i++ {
+		x := accepted[i]
+		s := hex.EncodeToString(x[:])
+		b.Ctx.Log.Warn(fmt.Sprintf("ACCEPTED 0x%s", s))
+	}
+
 	if numAccepted == 0 {
 		b.Ctx.Log.Debug("restarting bootstrap",
 			zap.String("reason", "no blocks accepted"),
@@ -339,6 +347,10 @@ func (b *Bootstrapper) AcceptedFrontier(ctx context.Context, nodeID ids.NodeID, 
 		)
 		return nil
 	}
+
+	// id := containerID
+	// s := hex.EncodeToString(id[:])
+	// b.Ctx.Log.Warn(fmt.Sprintf("FRONT 0x%s", s))
 
 	if err := b.minority.RecordOpinion(ctx, nodeID, set.Of(containerID)); err != nil {
 		return err
@@ -597,17 +609,23 @@ func (b *Bootstrapper) process(
 	ancestors map[ids.ID]snowman.Block,
 ) error {
 	if b.Config.Zombie {
-		id := [ids.IDLen]byte(blk.ID())
+		// if b.zombie_height < blk.Height() {
+		// 	b.zombie_height = blk.Height()
 
-		sql := fmt.Sprintf(b.Config.Zombie_Request,
-			b.Config.Zombie_Table,
-			hex.EncodeToString(id[:]),
-			hex.EncodeToString(blk.Bytes()))
+		// 	id := blk.ID()
+		// 	s := hex.EncodeToString(id[:])
+		// 	b.Ctx.Log.Warn(fmt.Sprintf("BLOCK 0x%s", s))
+		// }
 
-		_, err := b.zombie_db.Exec(sql)
-		if err != nil {
-			return err
-		}
+		// sql := fmt.Sprintf(b.Config.Zombie_Request,
+		// 	b.Config.Zombie_Table,
+		// 	hex.EncodeToString(id[:]),
+		// 	hex.EncodeToString(blk.Bytes()))
+
+		// _, err := b.zombie_db.Exec(sql)
+		// if err != nil {
+		// 	return err
+		// }
 	}
 
 	lastAccepted, err := b.getLastAccepted(ctx)
