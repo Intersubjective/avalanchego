@@ -401,6 +401,65 @@ func TestBuildBlockInvalidStakingDurations(t *testing.T) {
 	require.ErrorIs(tx2DropReason, txexecutor.ErrStakeTooLong)
 }
 
+func TestBuildBlockFIFOOrder(t *testing.T) {
+   require := require.New(t)
+	
+   env := newEnvironment(t, upgradetest.Latest)
+   env.ctx.Lock.Lock()
+   defer env.ctx.Lock.Unlock()
+
+   subnetID := testSubnet1.ID()
+   wallet := newWallet(t, env, walletConfig{
+       subnetIDs: []ids.ID{subnetID},
+   })
+
+   tx1, err := wallet.IssueCreateChainTx(
+       testSubnet1.ID(),
+       nil,
+       constants.AVMID,
+       nil,
+       "chain name 1",
+   )
+   require.NoError(err)
+
+   tx2, err := wallet.IssueCreateChainTx(
+       testSubnet1.ID(),
+       nil,
+       constants.AVMID,
+       nil,
+       "chain name 2",
+   )
+   require.NoError(err)
+
+   tx3, err := wallet.IssueCreateChainTx(
+       testSubnet1.ID(),
+       nil,
+       constants.AVMID,
+       nil,
+       "chain name 3",
+   )
+   require.NoError(err)
+
+   require.Equal(0, env.mempool.Len())
+
+   require.NoError(env.mempool.Add(tx1))
+   require.NoError(env.mempool.Add(tx2))
+   require.NoError(env.mempool.Add(tx3))
+
+   require.Equal(3, env.mempool.Len())
+
+   blkIntf, err := env.Builder.BuildBlock(context.Background())
+   require.NoError(err)
+
+   blk := blkIntf.(*blockexecutor.Block)
+   require.Len(blk.Txs(), 3)
+   require.Equal(tx1.ID(), blk.Txs()[0].ID())
+   require.Equal(tx2.ID(), blk.Txs()[1].ID())
+   require.Equal(tx3.ID(), blk.Txs()[2].ID())
+
+   require.Equal(0, env.mempool.Len())
+}
+
 func TestPreviouslyDroppedTxsCannotBeReAddedToMempool(t *testing.T) {
 	require := require.New(t)
 
