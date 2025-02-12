@@ -423,37 +423,57 @@ func packDurangoBlockTxs(
 		inputs        set.Set[ids.ID]
 		feeCalculator = state.PickFeeCalculator(backend.Config, stateDiff)
 	)
+
 	for {
 		tx, exists := mempool.Peek()
 		if !exists {
 			break
 		}
+
 		txSize := len(tx.Bytes())
+
 		if txSize > remainingSize {
+			// Check if block is empty for big transaction
+			if len(blockTxs) == 0 {
+				// Add big transaction
+				shouldAdd, err := executeTx(
+					ctx, parentID, stateDiff, mempool,
+					backend, manager, pChainHeight,
+					&inputs, feeCalculator, tx,
+				)
+				if err != nil {
+					return nil, err
+				}
+
+				if shouldAdd {
+					blockTxs = append(blockTxs, tx)
+					remainingSize -= txSize
+					mempool.Remove(tx)
+					continue
+				}
+			}
+
+			// If block non-empty
 			break
 		}
 
 		shouldAdd, err := executeTx(
-			ctx,
-			parentID,
-			stateDiff,
-			mempool,
-			backend,
-			manager,
-			pChainHeight,
-			&inputs,
-			feeCalculator,
-			tx,
+			ctx, parentID, stateDiff, mempool,
+			backend, manager, pChainHeight,
+			&inputs, feeCalculator, tx,
 		)
 		if err != nil {
 			return nil, err
 		}
+
 		if !shouldAdd {
+			mempool.Remove(tx)
 			continue
 		}
 
 		remainingSize -= txSize
 		blockTxs = append(blockTxs, tx)
+		mempool.Remove(tx)
 	}
 
 	return blockTxs, nil

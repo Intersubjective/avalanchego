@@ -6,6 +6,7 @@ package builder
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -402,62 +403,121 @@ func TestBuildBlockInvalidStakingDurations(t *testing.T) {
 }
 
 func TestBuildBlockFIFOOrder(t *testing.T) {
-   require := require.New(t)
-	
-   env := newEnvironment(t, upgradetest.Latest)
-   env.ctx.Lock.Lock()
-   defer env.ctx.Lock.Unlock()
+	require := require.New(t)
 
-   subnetID := testSubnet1.ID()
-   wallet := newWallet(t, env, walletConfig{
-       subnetIDs: []ids.ID{subnetID},
-   })
+	env := newEnvironment(t, upgradetest.Latest)
+	env.ctx.Lock.Lock()
+	defer env.ctx.Lock.Unlock()
 
-   tx1, err := wallet.IssueCreateChainTx(
-       testSubnet1.ID(),
-       nil,
-       constants.AVMID,
-       nil,
-       "chain name 1",
-   )
-   require.NoError(err)
+	subnetID := testSubnet1.ID()
+	wallet := newWallet(t, env, walletConfig{
+		subnetIDs: []ids.ID{subnetID},
+	})
 
-   tx2, err := wallet.IssueCreateChainTx(
-       testSubnet1.ID(),
-       nil,
-       constants.AVMID,
-       nil,
-       "chain name 2",
-   )
-   require.NoError(err)
+	tx1, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		nil,
+		constants.AVMID,
+		nil,
+		"chain name 1",
+	)
+	require.NoError(err)
 
-   tx3, err := wallet.IssueCreateChainTx(
-       testSubnet1.ID(),
-       nil,
-       constants.AVMID,
-       nil,
-       "chain name 3",
-   )
-   require.NoError(err)
+	tx2, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		nil,
+		constants.AVMID,
+		nil,
+		"chain name 2",
+	)
+	require.NoError(err)
 
-   require.Equal(0, env.mempool.Len())
+	tx3, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		nil,
+		constants.AVMID,
+		nil,
+		"chain name 3",
+	)
+	require.NoError(err)
 
-   require.NoError(env.mempool.Add(tx1))
-   require.NoError(env.mempool.Add(tx2))
-   require.NoError(env.mempool.Add(tx3))
+	require.Equal(0, env.mempool.Len())
 
-   require.Equal(3, env.mempool.Len())
+	require.NoError(env.mempool.Add(tx1))
+	require.NoError(env.mempool.Add(tx2))
+	require.NoError(env.mempool.Add(tx3))
 
-   blkIntf, err := env.Builder.BuildBlock(context.Background())
-   require.NoError(err)
+	require.Equal(3, env.mempool.Len())
 
-   blk := blkIntf.(*blockexecutor.Block)
-   require.Len(blk.Txs(), 3)
-   require.Equal(tx1.ID(), blk.Txs()[0].ID())
-   require.Equal(tx2.ID(), blk.Txs()[1].ID())
-   require.Equal(tx3.ID(), blk.Txs()[2].ID())
+	blkIntf, err := env.Builder.BuildBlock(context.Background())
+	require.NoError(err)
 
-   require.Equal(0, env.mempool.Len())
+	blk := blkIntf.(*blockexecutor.Block)
+	require.Len(blk.Txs(), 3)
+	require.Equal(tx1.ID(), blk.Txs()[0].ID())
+	require.Equal(tx2.ID(), blk.Txs()[1].ID())
+	require.Equal(tx3.ID(), blk.Txs()[2].ID())
+
+	require.Equal(0, env.mempool.Len())
+}
+
+func TestBuildBlockFIFOOrderWithSizeLimit(t *testing.T) {
+	t.Run("Durango", func(t *testing.T) {
+		require := require.New(t)
+		env := newEnvironment(t, upgradetest.Latest)
+		env.ctx.Lock.Lock()
+		defer env.ctx.Lock.Unlock()
+
+		subnetID := testSubnet1.ID()
+		wallet := newWallet(t, env, walletConfig{
+			subnetIDs: []ids.ID{subnetID},
+		})
+
+		// Small transaction
+		tx1, err := wallet.IssueCreateChainTx(
+			testSubnet1.ID(),
+			nil,
+			constants.AVMID,
+			nil,
+			"small chain 1",
+		)
+		require.NoError(err)
+
+		// Big one (~32KB)
+		bigVMID := ids.GenerateTestID()
+		vmGenesisBytes := []byte(strings.Repeat("a", 32*1024))
+		tx2, err := wallet.IssueCreateChainTx(
+			testSubnet1.ID(),
+			vmGenesisBytes,
+			bigVMID,
+			nil,
+			"big chain 2",
+		)
+		require.NoError(err)
+
+		// Small one
+		tx3, err := wallet.IssueCreateChainTx(
+			testSubnet1.ID(),
+			nil,
+			constants.AVMID,
+			nil,
+			"small chain 3",
+		)
+		require.NoError(err)
+
+		require.NoError(env.mempool.Add(tx1))
+		require.NoError(env.mempool.Add(tx2))
+		require.NoError(env.mempool.Add(tx3))
+
+		blkIntf, err := env.Builder.BuildBlock(context.Background())
+		require.NoError(err)
+
+		blk := blkIntf.(*blockexecutor.Block)
+
+		txs := blk.Txs()
+		require.Len(txs, 3)
+		require.Equal(tx1.ID(), txs[0].ID())
+	})
 }
 
 func TestPreviouslyDroppedTxsCannotBeReAddedToMempool(t *testing.T) {
