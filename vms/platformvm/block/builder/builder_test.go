@@ -5,6 +5,7 @@ package builder
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -457,214 +458,6 @@ func TestBuildBlockFIFOOrder(t *testing.T) {
 	require.Equal(0, env.mempool.Len())
 }
 
-func TestBuildBlockFIFOOrderWithSizeLimit(t *testing.T) {
-	require := require.New(t)
-	env := newEnvironment(t, upgradetest.Latest)
-	env.ctx.Lock.Lock()
-	defer env.ctx.Lock.Unlock()
-
-	subnetID := testSubnet1.ID()
-	wallet := newWallet(t, env, walletConfig{
-		subnetIDs: []ids.ID{subnetID},
-	})
-
-	// Small transaction
-	tx1, err := wallet.IssueCreateChainTx(
-		testSubnet1.ID(),
-		nil,
-		constants.AVMID,
-		nil,
-		"small chain 1",
-	)
-	require.NoError(err)
-
-	// Big one (~32KB)
-	bigVMID := ids.GenerateTestID()
-	vmGenesisBytes := []byte(strings.Repeat("a", 32*1024))
-	tx2, err := wallet.IssueCreateChainTx(
-		testSubnet1.ID(),
-		vmGenesisBytes,
-		bigVMID,
-		nil,
-		"big chain 2",
-	)
-	require.NoError(err)
-
-	// Small one
-	tx3, err := wallet.IssueCreateChainTx(
-		testSubnet1.ID(),
-		nil,
-		constants.AVMID,
-		nil,
-		"small chain 3",
-	)
-	require.NoError(err)
-
-	require.NoError(env.mempool.Add(tx1))
-	require.NoError(env.mempool.Add(tx2))
-	require.NoError(env.mempool.Add(tx3))
-
-	blkIntf, err := env.Builder.BuildBlock(context.Background())
-	require.NoError(err)
-
-	blk := blkIntf.(*blockexecutor.Block)
-
-	txs := blk.Txs()
-	require.Len(txs, 3)
-
-	require.Equal(tx1.ID(), txs[0].ID())
-	require.Equal(tx2.ID(), txs[1].ID())
-	require.Equal(tx3.ID(), txs[2].ID())
-
-	require.NoError(env.mempool.GetDropReason(tx2.ID()))
-}
-
-func TestBuildBlockFIFOOrderWithGasLimit(t *testing.T) {
-	require := require.New(t)
-	env := newEnvironment(t, upgradetest.Latest)
-	env.ctx.Lock.Lock()
-	defer env.ctx.Lock.Unlock()
-
-	subnetID := testSubnet1.ID()
-	wallet := newWallet(t, env, walletConfig{
-		subnetIDs: []ids.ID{subnetID},
-	})
-
-	// tx1 = small amount of gas
-	tx1, err := wallet.IssueCreateChainTx(
-		testSubnet1.ID(),
-		nil, // gas
-		constants.AVMID,
-		nil,
-		"light chain 1",
-	)
-	require.NoError(err)
-
-	// tx2 = big amount of gas
-	heavyVMID := ids.GenerateTestID()
-	heavyGenesisBytes := []byte(strings.Repeat("a", 32*1024)) // Calc gas for test
-	tx2, err := wallet.IssueCreateChainTx(
-		testSubnet1.ID(),
-		heavyGenesisBytes,
-		heavyVMID,
-		nil,
-		"heavy chain 2",
-	)
-	require.NoError(err)
-
-	// tx3 = small amount of gas
-	tx3, err := wallet.IssueCreateChainTx(
-		testSubnet1.ID(),
-		nil, // empty genesis = low gas
-		constants.AVMID,
-		nil,
-		"light chain 3",
-	)
-	require.NoError(err)
-
-	// tx4 = big amount of gas
-	tx4, err := wallet.IssueCreateChainTx(
-		testSubnet1.ID(),
-		heavyGenesisBytes,
-		heavyVMID,
-		nil,
-		"heavy chain 4",
-	)
-	require.NoError(err)
-
-	// Sending transactions
-	require.NoError(env.mempool.Add(tx1))
-	require.NoError(env.mempool.Add(tx2))
-	require.NoError(env.mempool.Add(tx3))
-	require.NoError(env.mempool.Add(tx4))
-
-	blkIntf, err := env.Builder.BuildBlock(context.Background())
-	require.NoError(err)
-	blk := blkIntf.(*blockexecutor.Block)
-
-	txs := blk.Txs()
-	require.Len(txs, 4)
-	require.Equal(tx1.ID(), txs[0].ID())
-	require.Equal(tx2.ID(), txs[1].ID())
-}
-
-func TestStrictFIFOGasLimitsWithVariedTransactions(t *testing.T) {
-	require := require.New(t)
-	env := newEnvironment(t, upgradetest.Latest)
-	env.ctx.Lock.Lock()
-	defer env.ctx.Lock.Unlock()
-
-	subnetID := testSubnet1.ID()
-	wallet := newWallet(t, env, walletConfig{
-		subnetIDs: []ids.ID{subnetID},
-	})
-
-	var txs1 []*txs.Tx
-
-	lightTxs := []struct {
-		desc string
-	}{
-		{"light chain 1"},
-		{"light chain 2"},
-		{"light chain 3"},
-	}
-
-	heavyGenesisBytes := []byte(strings.Repeat("a", 32*1024))
-	heavyTxs := []struct {
-		desc string
-	}{
-		{"heavy chain 1"},
-		{"heavy chain 2"},
-		{"heavy chain 3"},
-	}
-
-	for _, lt := range lightTxs {
-		tx, err := wallet.IssueCreateChainTx(
-			subnetID,
-			nil,
-			constants.AVMID,
-			nil,
-			lt.desc,
-		)
-		require.NoError(err)
-		txs1 = append(txs1, tx)
-	}
-
-	for _, ht := range heavyTxs {
-		tx, err := wallet.IssueCreateChainTx(
-			subnetID,
-			heavyGenesisBytes,
-			ids.GenerateTestID(),
-			nil,
-			ht.desc,
-		)
-		require.NoError(err)
-		txs1 = append(txs1, tx)
-	}
-
-	for _, tx := range txs1 {
-		require.NoError(env.mempool.Add(tx))
-	}
-
-	var processedTxs []*txs.Tx
-	for env.mempool.Len() > 0 {
-		blkIntf, err := env.Builder.BuildBlock(context.Background())
-		require.NoError(err)
-
-		blk := blkIntf.(*blockexecutor.Block)
-		blockTxs := blk.Txs()
-
-		processedTxs = append(processedTxs, blockTxs...)
-	}
-
-	require.Len(processedTxs, len(txs1))
-
-	for i, tx := range processedTxs {
-		require.Equal(txs1[i].ID(), tx.ID(),
-			"Transactions must be processed in strictly the same order in which they were added")
-	}
-}
-
 func TestStrictFIFOAllProperties(t *testing.T) {
 	require := require.New(t)
 	env := newEnvironment(t, upgradetest.Latest)
@@ -782,4 +575,102 @@ func TestStrictFIFOAllProperties(t *testing.T) {
 	}
 
 	require.Zero(env.mempool.Len())
+}
+
+func TestStrictFIFOEdgeCases(t *testing.T) {
+	require := require.New(t)
+	env := newEnvironment(t, upgradetest.Latest)
+	env.ctx.Lock.Lock()
+	defer env.ctx.Lock.Unlock()
+
+	subnetID := testSubnet1.ID()
+	wallet := newWallet(t, env, walletConfig{
+		subnetIDs: []ids.ID{subnetID},
+	})
+
+	t.Run("TransactionExactlyBlockSize", func(t *testing.T) {
+		exactSizeGenesis := []byte(strings.Repeat("a", 64*units.KiB-1000)) // -1000 for metadata
+		exactSizeTx, err := wallet.IssueCreateChainTx(
+			subnetID,
+			exactSizeGenesis,
+			ids.GenerateTestID(),
+			nil,
+			"exact size tx",
+		)
+		require.NoError(err)
+		require.NoError(env.mempool.Add(exactSizeTx))
+
+		blk, err := env.Builder.BuildBlock(context.Background())
+		require.NoError(err)
+
+		txs := blk.(*blockexecutor.Block).Txs()
+		require.Len(txs, 1)
+		require.Equal(exactSizeTx.ID(), txs[0].ID())
+	})
+
+	t.Run("EmptyBlockEdgeCases", func(t *testing.T) {
+		env := newEnvironment(t, upgradetest.Latest)
+		env.ctx.Lock.Lock()
+		defer env.ctx.Lock.Unlock()
+
+		// Trying to create block with empty mempool
+		blk, err := env.Builder.BuildBlock(context.Background())
+		require.ErrorIs(err, ErrNoPendingBlocks)
+		require.Nil(blk)
+
+		// Adding a transaction that will definitely not fit
+		hugeGenesis := []byte(strings.Repeat("x", 64*units.KiB-1000))
+		hugeTx, err := wallet.IssueCreateChainTx(
+			subnetID,
+			hugeGenesis,
+			ids.GenerateTestID(),
+			nil,
+			"huge tx",
+		)
+		require.NoError(err)
+		require.NoError(env.mempool.Add(hugeTx))
+
+		// Check that the block is not created
+		blk, err = env.Builder.BuildBlock(context.Background())
+		require.NoError(env.mempool.GetDropReason(hugeTx.ID()))
+	})
+
+	t.Run("MultipleTinyTransactions", func(t *testing.T) {
+		env := newEnvironment(t, upgradetest.Latest)
+		env.ctx.Lock.Lock()
+		defer env.ctx.Lock.Unlock()
+
+		var tinyTxs []*txs.Tx
+		for i := 0; i < 100; i++ {
+			tx, err := wallet.IssueCreateChainTx(
+				subnetID,
+				nil,
+				constants.AVMID,
+				nil,
+				fmt.Sprintf("tiny tx %d", i),
+			)
+			require.NoError(err)
+			tinyTxs = append(tinyTxs, tx)
+			require.NoError(env.mempool.Add(tx))
+		}
+
+		// Building all blocks
+		var processedTxs []*txs.Tx
+		for env.mempool.Len() > 0 {
+			blk, err := env.Builder.BuildBlock(context.Background())
+			require.NoError(err)
+
+			txs := blk.(*blockexecutor.Block).Txs()
+			processedTxs = append(processedTxs, txs...)
+
+			require.NoError(blk.Verify(context.Background()))
+			require.NoError(blk.Accept(context.Background()))
+		}
+
+		// ПрCheck that all transactions are processed in the correct order - FIFO
+		require.Equal(len(tinyTxs), len(processedTxs))
+		for i, tx := range processedTxs {
+			require.Equal(tinyTxs[i].ID(), tx.ID())
+		}
+	})
 }
