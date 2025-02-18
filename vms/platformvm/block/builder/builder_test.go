@@ -5,21 +5,17 @@ package builder
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/consensus/snowman"
 	"github.com/ava-labs/avalanchego/upgrade/upgradetest"
 	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/bls"
-	"github.com/ava-labs/avalanchego/utils/iterator"
-	"github.com/ava-labs/avalanchego/utils/timer/mockable"
 	"github.com/ava-labs/avalanchego/utils/units"
 	"github.com/ava-labs/avalanchego/vms/platformvm/block"
 	"github.com/ava-labs/avalanchego/vms/platformvm/reward"
@@ -462,67 +458,7 @@ func TestBuildBlockFIFOOrder(t *testing.T) {
 }
 
 func TestBuildBlockFIFOOrderWithSizeLimit(t *testing.T) {
-	t.Run("Durango", func(t *testing.T) {
-		require := require.New(t)
-		env := newEnvironment(t, upgradetest.Latest)
-		env.ctx.Lock.Lock()
-		defer env.ctx.Lock.Unlock()
-
-		subnetID := testSubnet1.ID()
-		wallet := newWallet(t, env, walletConfig{
-			subnetIDs: []ids.ID{subnetID},
-		})
-
-		// Small transaction
-		tx1, err := wallet.IssueCreateChainTx(
-			testSubnet1.ID(),
-			nil,
-			constants.AVMID,
-			nil,
-			"small chain 1",
-		)
-		require.NoError(err)
-
-		// Big one (~32KB)
-		bigVMID := ids.GenerateTestID()
-		vmGenesisBytes := []byte(strings.Repeat("a", 32*1024))
-		tx2, err := wallet.IssueCreateChainTx(
-			testSubnet1.ID(),
-			vmGenesisBytes,
-			bigVMID,
-			nil,
-			"big chain 2",
-		)
-		require.NoError(err)
-
-		// Small one
-		tx3, err := wallet.IssueCreateChainTx(
-			testSubnet1.ID(),
-			nil,
-			constants.AVMID,
-			nil,
-			"small chain 3",
-		)
-		require.NoError(err)
-
-		require.NoError(env.mempool.Add(tx1))
-		require.NoError(env.mempool.Add(tx2))
-		require.NoError(env.mempool.Add(tx3))
-
-		blkIntf, err := env.Builder.BuildBlock(context.Background())
-		require.NoError(err)
-
-		blk := blkIntf.(*blockexecutor.Block)
-
-		txs := blk.Txs()
-		require.Len(txs, 3)
-		require.Equal(tx1.ID(), txs[0].ID())
-	})
-}
-
-func TestPreviouslyDroppedTxsCannotBeReAddedToMempool(t *testing.T) {
 	require := require.New(t)
-
 	env := newEnvironment(t, upgradetest.Latest)
 	env.ctx.Lock.Lock()
 	defer env.ctx.Lock.Unlock()
@@ -532,212 +468,318 @@ func TestPreviouslyDroppedTxsCannotBeReAddedToMempool(t *testing.T) {
 		subnetIDs: []ids.ID{subnetID},
 	})
 
-	// Create a valid transaction
-	tx, err := wallet.IssueCreateChainTx(
+	// Small transaction
+	tx1, err := wallet.IssueCreateChainTx(
 		testSubnet1.ID(),
 		nil,
 		constants.AVMID,
 		nil,
-		"chain name",
+		"small chain 1",
 	)
 	require.NoError(err)
 
-	// Transaction should not be marked as dropped before being added to the
-	// mempool
-	txID := tx.ID()
-	require.NoError(env.mempool.GetDropReason(txID))
+	// Big one (~32KB)
+	bigVMID := ids.GenerateTestID()
+	vmGenesisBytes := []byte(strings.Repeat("a", 32*1024))
+	tx2, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		vmGenesisBytes,
+		bigVMID,
+		nil,
+		"big chain 2",
+	)
+	require.NoError(err)
 
-	// Mark the transaction as dropped
-	errTestingDropped := errors.New("testing dropped")
-	env.mempool.MarkDropped(txID, errTestingDropped)
-	err = env.mempool.GetDropReason(txID)
-	require.ErrorIs(err, errTestingDropped)
+	// Small one
+	tx3, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		nil,
+		constants.AVMID,
+		nil,
+		"small chain 3",
+	)
+	require.NoError(err)
 
-	// Issue the transaction
-	env.ctx.Lock.Unlock()
-	err = env.network.IssueTxFromRPC(tx)
-	require.ErrorIs(err, errTestingDropped)
-	env.ctx.Lock.Lock()
-	_, ok := env.mempool.Get(txID)
-	require.False(ok)
+	require.NoError(env.mempool.Add(tx1))
+	require.NoError(env.mempool.Add(tx2))
+	require.NoError(env.mempool.Add(tx3))
 
-	// When issued again, the mempool should still be marked as dropped
-	err = env.mempool.GetDropReason(txID)
-	require.ErrorIs(err, errTestingDropped)
+	blkIntf, err := env.Builder.BuildBlock(context.Background())
+	require.NoError(err)
+
+	blk := blkIntf.(*blockexecutor.Block)
+
+	txs := blk.Txs()
+	require.Len(txs, 3)
+
+	require.Equal(tx1.ID(), txs[0].ID())
+	require.Equal(tx2.ID(), txs[1].ID())
+	require.Equal(tx3.ID(), txs[2].ID())
+
+	require.NoError(env.mempool.GetDropReason(tx2.ID()))
 }
 
-func TestNoErrorOnUnexpectedSetPreferenceDuringBootstrapping(t *testing.T) {
+func TestBuildBlockFIFOOrderWithGasLimit(t *testing.T) {
 	require := require.New(t)
-
 	env := newEnvironment(t, upgradetest.Latest)
 	env.ctx.Lock.Lock()
 	defer env.ctx.Lock.Unlock()
 
-	env.isBootstrapped.Set(false)
+	subnetID := testSubnet1.ID()
+	wallet := newWallet(t, env, walletConfig{
+		subnetIDs: []ids.ID{subnetID},
+	})
 
-	require.True(env.blkManager.SetPreference(ids.GenerateTestID())) // should not panic
+	// tx1 = small amount of gas
+	tx1, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		nil, // gas
+		constants.AVMID,
+		nil,
+		"light chain 1",
+	)
+	require.NoError(err)
+
+	// tx2 = big amount of gas
+	heavyVMID := ids.GenerateTestID()
+	heavyGenesisBytes := []byte(strings.Repeat("a", 32*1024)) // Calc gas for test
+	tx2, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		heavyGenesisBytes,
+		heavyVMID,
+		nil,
+		"heavy chain 2",
+	)
+	require.NoError(err)
+
+	// tx3 = small amount of gas
+	tx3, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		nil, // empty genesis = low gas
+		constants.AVMID,
+		nil,
+		"light chain 3",
+	)
+	require.NoError(err)
+
+	// tx4 = big amount of gas
+	tx4, err := wallet.IssueCreateChainTx(
+		testSubnet1.ID(),
+		heavyGenesisBytes,
+		heavyVMID,
+		nil,
+		"heavy chain 4",
+	)
+	require.NoError(err)
+
+	// Sending transactions
+	require.NoError(env.mempool.Add(tx1))
+	require.NoError(env.mempool.Add(tx2))
+	require.NoError(env.mempool.Add(tx3))
+	require.NoError(env.mempool.Add(tx4))
+
+	blkIntf, err := env.Builder.BuildBlock(context.Background())
+	require.NoError(err)
+	blk := blkIntf.(*blockexecutor.Block)
+
+	txs := blk.Txs()
+	require.Len(txs, 4)
+	require.Equal(tx1.ID(), txs[0].ID())
+	require.Equal(tx2.ID(), txs[1].ID())
 }
 
-func TestGetNextStakerToReward(t *testing.T) {
-	var (
-		now  = time.Now()
-		txID = ids.GenerateTestID()
+func TestStrictFIFOGasLimitsWithVariedTransactions(t *testing.T) {
+	require := require.New(t)
+	env := newEnvironment(t, upgradetest.Latest)
+	env.ctx.Lock.Lock()
+	defer env.ctx.Lock.Unlock()
+
+	subnetID := testSubnet1.ID()
+	wallet := newWallet(t, env, walletConfig{
+		subnetIDs: []ids.ID{subnetID},
+	})
+
+	var txs1 []*txs.Tx
+
+	lightTxs := []struct {
+		desc string
+	}{
+		{"light chain 1"},
+		{"light chain 2"},
+		{"light chain 3"},
+	}
+
+	heavyGenesisBytes := []byte(strings.Repeat("a", 32*1024))
+	heavyTxs := []struct {
+		desc string
+	}{
+		{"heavy chain 1"},
+		{"heavy chain 2"},
+		{"heavy chain 3"},
+	}
+
+	for _, lt := range lightTxs {
+		tx, err := wallet.IssueCreateChainTx(
+			subnetID,
+			nil,
+			constants.AVMID,
+			nil,
+			lt.desc,
+		)
+		require.NoError(err)
+		txs1 = append(txs1, tx)
+	}
+
+	for _, ht := range heavyTxs {
+		tx, err := wallet.IssueCreateChainTx(
+			subnetID,
+			heavyGenesisBytes,
+			ids.GenerateTestID(),
+			nil,
+			ht.desc,
+		)
+		require.NoError(err)
+		txs1 = append(txs1, tx)
+	}
+
+	for _, tx := range txs1 {
+		require.NoError(env.mempool.Add(tx))
+	}
+
+	var processedTxs []*txs.Tx
+	for env.mempool.Len() > 0 {
+		blkIntf, err := env.Builder.BuildBlock(context.Background())
+		require.NoError(err)
+
+		blk := blkIntf.(*blockexecutor.Block)
+		blockTxs := blk.Txs()
+
+		processedTxs = append(processedTxs, blockTxs...)
+	}
+
+	require.Len(processedTxs, len(txs1))
+
+	for i, tx := range processedTxs {
+		require.Equal(txs1[i].ID(), tx.ID(),
+			"Transactions must be processed in strictly the same order in which they were added")
+	}
+}
+
+func TestStrictFIFOAllProperties(t *testing.T) {
+	require := require.New(t)
+	env := newEnvironment(t, upgradetest.Latest)
+	env.ctx.Lock.Lock()
+	defer env.ctx.Lock.Unlock()
+
+	subnetID := testSubnet1.ID()
+	wallet := newWallet(t, env, walletConfig{
+		subnetIDs: []ids.ID{subnetID},
+	})
+
+	var allTxs []*txs.Tx
+
+	/// Light Txs (low size and gas)
+	lightTxs := []struct {
+		name string
+		vmID ids.ID
+	}{
+		{"light chain 1", constants.AVMID},
+		{"light chain 2", constants.AVMID},
+		{"light chain 3", constants.AVMID},
+	}
+
+	for _, lt := range lightTxs {
+		tx, err := wallet.IssueCreateChainTx(
+			subnetID,
+			nil, // empty genesis = low gas
+			lt.vmID,
+			nil,
+			lt.name,
+		)
+		require.NoError(err)
+		allTxs = append(allTxs, tx)
+	}
+
+	/// Heavy Txs (big size and gas)
+	heavyGenesisBytes := []byte(strings.Repeat("a", 32*1024))
+	heavyTxs := []struct {
+		name string
+		vmID ids.ID
+	}{
+		{"heavy chain 1", ids.GenerateTestID()},
+		{"heavy chain 2", ids.GenerateTestID()},
+		{"heavy chain 3", ids.GenerateTestID()},
+	}
+
+	for _, ht := range heavyTxs {
+		tx, err := wallet.IssueCreateChainTx(
+			subnetID,
+			heavyGenesisBytes,
+			ht.vmID,
+			nil,
+			ht.name,
+		)
+		require.NoError(err)
+		allTxs = append(allTxs, tx)
+	}
+
+	/// Mixed Txs
+
+	// Small size, high gas
+	smallSizeHighGasGenesisBytes := []byte(strings.Repeat("x", 1024))
+	smallSizeHighGasTx, err := wallet.IssueCreateChainTx(
+		subnetID,
+		smallSizeHighGasGenesisBytes,
+		ids.GenerateTestID(),
+		nil,
+		"small size high gas",
 	)
+	require.NoError(err)
+	allTxs = append(allTxs, smallSizeHighGasTx)
 
-	type test struct {
-		name                 string
-		timestamp            time.Time
-		stateF               func(*gomock.Controller) state.Chain
-		expectedTxID         ids.ID
-		expectedShouldReward bool
-		expectedErr          error
+	// Big size, low gas
+	bigSizeLowGasGenesisBytes := []byte(strings.Repeat("z", 32*1024))
+	bigSizeLowGasTx, err := wallet.IssueCreateChainTx(
+		subnetID,
+		bigSizeLowGasGenesisBytes,
+		constants.AVMID,
+		nil,
+		"big size low gas",
+	)
+	require.NoError(err)
+	allTxs = append(allTxs, bigSizeLowGasTx)
+
+	// Adding into mempool
+	for _, tx := range allTxs {
+		require.NoError(env.mempool.Add(tx))
 	}
 
-	tests := []test{
-		{
-			name:      "end of time",
-			timestamp: mockable.MaxTime,
-			stateF: func(ctrl *gomock.Controller) state.Chain {
-				return state.NewMockChain(ctrl)
-			},
-			expectedErr: ErrEndOfTime,
-		},
-		{
-			name:      "no stakers",
-			timestamp: now,
-			stateF: func(ctrl *gomock.Controller) state.Chain {
-				s := state.NewMockChain(ctrl)
-				s.EXPECT().GetCurrentStakerIterator().Return(iterator.Empty[*state.Staker]{}, nil)
-				return s
-			},
-		},
-		{
-			name:      "expired subnet validator/delegator",
-			timestamp: now,
-			stateF: func(ctrl *gomock.Controller) state.Chain {
-				s := state.NewMockChain(ctrl)
-				s.EXPECT().GetCurrentStakerIterator().Return(
-					iterator.FromSlice(
-						&state.Staker{
-							Priority: txs.SubnetPermissionedValidatorCurrentPriority,
-							EndTime:  now,
-						},
-						&state.Staker{
-							TxID:     txID,
-							Priority: txs.SubnetPermissionlessDelegatorCurrentPriority,
-							EndTime:  now,
-						},
-					),
-					nil,
-				)
-				return s
-			},
-			expectedTxID:         txID,
-			expectedShouldReward: true,
-		},
-		{
-			name:      "expired primary network validator after subnet expired subnet validator",
-			timestamp: now,
-			stateF: func(ctrl *gomock.Controller) state.Chain {
-				s := state.NewMockChain(ctrl)
-				s.EXPECT().GetCurrentStakerIterator().Return(
-					iterator.FromSlice(
-						&state.Staker{
-							Priority: txs.SubnetPermissionedValidatorCurrentPriority,
-							EndTime:  now,
-						},
-						&state.Staker{
-							TxID:     txID,
-							Priority: txs.PrimaryNetworkValidatorCurrentPriority,
-							EndTime:  now,
-						},
-					),
-					nil,
-				)
-				return s
-			},
-			expectedTxID:         txID,
-			expectedShouldReward: true,
-		},
-		{
-			name:      "expired primary network delegator after subnet expired subnet validator",
-			timestamp: now,
-			stateF: func(ctrl *gomock.Controller) state.Chain {
-				s := state.NewMockChain(ctrl)
-				s.EXPECT().GetCurrentStakerIterator().Return(
-					iterator.FromSlice(
-						&state.Staker{
-							Priority: txs.SubnetPermissionedValidatorCurrentPriority,
-							EndTime:  now,
-						},
-						&state.Staker{
-							TxID:     txID,
-							Priority: txs.PrimaryNetworkDelegatorCurrentPriority,
-							EndTime:  now,
-						},
-					),
-					nil,
-				)
-				return s
-			},
-			expectedTxID:         txID,
-			expectedShouldReward: true,
-		},
-		{
-			name:      "non-expired primary network delegator",
-			timestamp: now,
-			stateF: func(ctrl *gomock.Controller) state.Chain {
-				s := state.NewMockChain(ctrl)
-				s.EXPECT().GetCurrentStakerIterator().Return(
-					iterator.FromSlice(
-						&state.Staker{
-							TxID:     txID,
-							Priority: txs.PrimaryNetworkDelegatorCurrentPriority,
-							EndTime:  now.Add(time.Second),
-						},
-					),
-					nil,
-				)
-				return s
-			},
-			expectedTxID:         txID,
-			expectedShouldReward: false,
-		},
-		{
-			name:      "non-expired primary network validator",
-			timestamp: now,
-			stateF: func(ctrl *gomock.Controller) state.Chain {
-				s := state.NewMockChain(ctrl)
-				s.EXPECT().GetCurrentStakerIterator().Return(
-					iterator.FromSlice(
-						&state.Staker{
-							TxID:     txID,
-							Priority: txs.PrimaryNetworkValidatorCurrentPriority,
-							EndTime:  now.Add(time.Second),
-						},
-					),
-					nil,
-				)
-				return s
-			},
-			expectedTxID:         txID,
-			expectedShouldReward: false,
-		},
+	// Get and check bloks
+	var processedTxs []*txs.Tx
+	for env.mempool.Len() > 0 {
+		blkIntf, err := env.Builder.BuildBlock(context.Background())
+		require.NoError(err)
+
+		blk := blkIntf.(*blockexecutor.Block)
+		blockTxs := blk.Txs()
+		processedTxs = append(processedTxs, blockTxs...)
+
+		require.NoError(blk.Verify(context.Background()))
+		require.NoError(blk.Accept(context.Background()))
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require := require.New(t)
-			ctrl := gomock.NewController(t)
+	/// Verifications
+	require.Len(processedTxs, len(allTxs))
 
-			state := tt.stateF(ctrl)
-			txID, shouldReward, err := getNextStakerToReward(tt.timestamp, state)
-			require.ErrorIs(err, tt.expectedErr)
-			if tt.expectedErr != nil {
-				return
-			}
-			require.Equal(tt.expectedTxID, txID)
-			require.Equal(tt.expectedShouldReward, shouldReward)
-		})
+	for i, tx := range processedTxs {
+		require.Equal(allTxs[i].ID(), tx.ID(),
+			"Transactions must be processed in strictly the same order in which they were added")
 	}
+
+	for _, tx := range allTxs {
+		require.NoError(env.mempool.GetDropReason(tx.ID()),
+			"No transaction should be discarded")
+	}
+
+	require.Zero(env.mempool.Len())
 }
