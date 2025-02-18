@@ -431,41 +431,26 @@ func packDurangoBlockTxs(
 		}
 
 		txSize := len(tx.Bytes())
-
 		if txSize > remainingSize {
-			// Check if block is empty for big transaction
-			if len(blockTxs) == 0 {
-				// Add big transaction
-				shouldAdd, err := executeTx(
-					ctx, parentID, stateDiff, mempool,
-					backend, manager, pChainHeight,
-					&inputs, feeCalculator, tx,
-				)
-				if err != nil {
-					return nil, err
-				}
-
-				if shouldAdd {
-					blockTxs = append(blockTxs, tx)
-					remainingSize -= txSize
-					mempool.Remove(tx)
-					continue
-				}
-			}
-
-			// If block non-empty
+			// Making strict FIFO: if the transaction does not fit - leave it in the mempool
 			break
 		}
 
 		shouldAdd, err := executeTx(
-			ctx, parentID, stateDiff, mempool,
-			backend, manager, pChainHeight,
-			&inputs, feeCalculator, tx,
+			ctx,
+			parentID,
+			stateDiff,
+			mempool,
+			backend,
+			manager,
+			pChainHeight,
+			&inputs,
+			feeCalculator,
+			tx,
 		)
 		if err != nil {
 			return nil, err
 		}
-
 		if !shouldAdd {
 			mempool.Remove(tx)
 			continue
