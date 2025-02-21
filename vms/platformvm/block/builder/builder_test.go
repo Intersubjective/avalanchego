@@ -547,7 +547,7 @@ func TestStrictFIFOAllProperties(t *testing.T) {
 		require.NoError(env.mempool.Add(tx))
 	}
 
-	// Get and check bloks
+	// Get and check blocks
 	var processedTxs []*txs.Tx
 	for env.mempool.Len() > 0 {
 		blkIntf, err := env.Builder.BuildBlock(context.Background())
