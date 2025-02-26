@@ -38,6 +38,7 @@ import (
 	"github.com/ava-labs/avalanchego/vms/platformvm/reward"
 	"github.com/ava-labs/avalanchego/vms/platformvm/state"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
+	"github.com/ava-labs/avalanchego/vms/platformvm/txs/counter"
 	"github.com/ava-labs/avalanchego/vms/platformvm/utxo"
 	"github.com/ava-labs/avalanchego/vms/secp256k1fx"
 	"github.com/ava-labs/avalanchego/vms/txs/mempool"
@@ -77,6 +78,8 @@ type VM struct {
 
 	state state.State
 
+	txCounter *counter.TxCounter
+
 	fx            fx.Fx
 	codecRegistry codec.Registry
 
@@ -105,6 +108,7 @@ func (vm *VM) Initialize(
 	appSender common.AppSender,
 ) error {
 	chainCtx.Log.Verbo("initializing platform chain")
+	vm.txCounter = counter.New()
 
 	execConfig, err := config.GetConfig(configBytes)
 	if err != nil {
@@ -249,6 +253,18 @@ func (vm *VM) Initialize(
 	}()
 
 	return nil
+}
+
+func (vm *VM) GetTxNumber(txID ids.ID) (uint64, bool) {
+	if vm.txCounter == nil {
+		return 0, false
+	}
+
+	metadata, exists := vm.txCounter.GetTxMetadata(txID)
+	if !exists {
+		return 0, false
+	}
+	return metadata.Number, true
 }
 
 func (vm *VM) periodicallyPruneMempool(frequency time.Duration) {
@@ -510,6 +526,10 @@ func (vm *VM) issueTxFromRPC(tx *txs.Tx) error {
 			zap.Error(err),
 		)
 		return err
+	}
+
+	if vm.txCounter != nil {
+		vm.txCounter.Increment(tx.ID())
 	}
 
 	return nil
