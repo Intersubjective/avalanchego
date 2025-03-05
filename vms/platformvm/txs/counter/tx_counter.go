@@ -1,3 +1,6 @@
+// Copyright (C) 2019-2025, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE for licensing terms.
+
 package counter
 
 import (
@@ -40,6 +43,7 @@ func (tc *TxCounter) Increment(txID ids.ID) uint64 {
 
 	tc.lock.Lock()
 	defer tc.lock.Unlock()
+
 	if metadata, exists := tc.txHistory[txID]; exists {
 		return metadata.Number
 	}
@@ -49,7 +53,6 @@ func (tc *TxCounter) Increment(txID ids.ID) uint64 {
 		Number:    newValue,
 		Timestamp: time.Now(),
 	}
-
 	return newValue
 }
 
@@ -60,6 +63,7 @@ func (tc *TxCounter) Get() uint64 {
 func (tc *TxCounter) GetTxMetadata(txID ids.ID) (TxMetadata, bool) {
 	tc.lock.RLock()
 	defer tc.lock.RUnlock()
+
 	metadata, exists := tc.txHistory[txID]
 	return metadata, exists
 }

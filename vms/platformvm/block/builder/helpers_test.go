@@ -35,6 +35,7 @@ import (
 	"github.com/ava-labs/avalanchego/vms/platformvm/config"
 	"github.com/ava-labs/avalanchego/vms/platformvm/fx"
 	"github.com/ava-labs/avalanchego/vms/platformvm/genesis/genesistest"
+	"github.com/ava-labs/avalanchego/vms/platformvm/manipulation"
 	"github.com/ava-labs/avalanchego/vms/platformvm/metrics"
 	"github.com/ava-labs/avalanchego/vms/platformvm/network"
 	"github.com/ava-labs/avalanchego/vms/platformvm/reward"
@@ -87,7 +88,7 @@ type environment struct {
 	backend        txexecutor.Backend
 }
 
-func newEnvironment(t *testing.T, f upgradetest.Fork) *environment { //nolint:unparam
+func newEnvironment(t *testing.T, f upgradetest.Fork) *environment {
 	require := require.New(t)
 
 	res := &environment{
@@ -156,6 +157,8 @@ func newEnvironment(t *testing.T, f upgradetest.Fork) *environment { //nolint:un
 		validatorstest.Manager,
 	)
 
+	manipulator := manipulation.New(true, true, logging.NoLog{})
+
 	txVerifier := network.NewLockedTxVerifier(&res.ctx.Lock, res.blkManager)
 	res.network, err = network.New(
 		res.backend.Ctx.Log,
@@ -178,6 +181,7 @@ func newEnvironment(t *testing.T, f upgradetest.Fork) *environment { //nolint:un
 		res.mempool,
 		&res.backend,
 		res.blkManager,
+		manipulator,
 	)
 	res.Builder.StartBlockTimer()
 

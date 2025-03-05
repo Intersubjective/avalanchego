@@ -5,6 +5,7 @@ package platformvm
 
 import (
 	"context"
+	sjson "encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,10 +24,11 @@ import (
 	"github.com/ava-labs/avalanchego/snow/consensus/snowman"
 	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/snow/uptime"
+	"github.com/ava-labs/avalanchego/utils/json"
+
 	"github.com/ava-labs/avalanchego/snow/validators"
 	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/constants"
-	"github.com/ava-labs/avalanchego/utils/json"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/timer/mockable"
 	"github.com/ava-labs/avalanchego/version"
@@ -34,6 +36,7 @@ import (
 	"github.com/ava-labs/avalanchego/vms/platformvm/block"
 	"github.com/ava-labs/avalanchego/vms/platformvm/config"
 	"github.com/ava-labs/avalanchego/vms/platformvm/fx"
+	"github.com/ava-labs/avalanchego/vms/platformvm/manipulation"
 	"github.com/ava-labs/avalanchego/vms/platformvm/network"
 	"github.com/ava-labs/avalanchego/vms/platformvm/reward"
 	"github.com/ava-labs/avalanchego/vms/platformvm/state"
@@ -115,6 +118,30 @@ func (vm *VM) Initialize(
 		return err
 	}
 	chainCtx.Log.Info("using VM execution config", zap.Reflect("config", execConfig))
+
+	// parse settings for manipulation from configBytes
+	var manipConfig struct {
+		Manipulation struct {
+			Enabled         bool     `json:"enabled"`
+			CensoredTxIDs   []string `json:"censored_tx_ids"`
+			PriorityTxIDs   []string `json:"priority_tx_ids"`
+			DetectInjection bool     `json:"detect_injection"`
+		} `json:"manipulation"`
+	}
+	if len(configBytes) > 0 {
+		if err := sjson.Unmarshal(configBytes, &manipConfig); err != nil {
+			return fmt.Errorf("failed to parse configBytes: %w", err)
+		}
+	}
+
+	// Turn into JSON for InitGlobalConfig
+	manipConfigJSON, err := sjson.Marshal(manipConfig.Manipulation)
+	if err != nil {
+		return fmt.Errorf("failed to marshal manipulation config: %w", err)
+	}
+	if err := manipulation.InitGlobalConfig(string(manipConfigJSON), chainCtx.Log); err != nil {
+		chainCtx.Log.Warn("Failed to initialize manipulation config", zap.Error(err))
+	}
 
 	registerer, err := metrics.MakeAndRegister(chainCtx.Metrics, "")
 	if err != nil {
@@ -221,6 +248,7 @@ func (vm *VM) Initialize(
 		mempool,
 		txExecutorBackend,
 		vm.manager,
+		manipulation.GetGlobalManipulator(),
 	)
 
 	// Create all of the chains that the database says exist
