@@ -2,41 +2,72 @@ package manipulation
 
 import (
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	platform "github.com/ava-labs/avalanchego/vms/platformvm/txs"
+	"github.com/ava-labs/avalanchego/vms/secp256k1fx"
 	"go.uber.org/zap"
 )
 
 type Manipulator struct {
-	Enabled         bool
-	CensoredTxIDs   map[ids.ID]struct{}
-	PriorityTxIDs   map[ids.ID]struct{}
-	DetectInjection bool
-	log             logging.Logger
+	Enabled           bool
+	CensoredAddresses map[ids.ShortID]struct{}
+	PriorityTxIDs     map[ids.ID]struct{}
+	DetectInjection   bool
+	log               logging.Logger
 }
 
 func New(enabled, detectInjection bool, log logging.Logger) *Manipulator {
 	return &Manipulator{
-		Enabled:         enabled,
-		CensoredTxIDs:   make(map[ids.ID]struct{}),
-		PriorityTxIDs:   make(map[ids.ID]struct{}),
-		DetectInjection: detectInjection,
-		log:             log,
+		Enabled:           enabled,
+		CensoredAddresses: make(map[ids.ShortID]struct{}),
+		PriorityTxIDs:     make(map[ids.ID]struct{}),
+		DetectInjection:   detectInjection,
+		log:               log,
 	}
 }
 
-func (m *Manipulator) ShouldCensor(txID ids.ID) bool {
+func (m *Manipulator) ShouldCensor(tx *platform.Tx) bool {
 	if !m.Enabled {
-		m.log.Debug("manipulator off, no censor check", zap.Stringer("txID", txID))
+		m.log.Debug("manipulator off, no censor check", zap.Stringer("txID", tx.ID()))
 		return false
 	}
-	_, shouldCensor := m.CensoredTxIDs[txID]
-	if shouldCensor {
-		m.log.Info("censoring tx", zap.Stringer("txID", txID))
-	} else {
-		m.log.Debug("tx not censored", zap.Stringer("txID", txID))
+
+	unsignedTx := tx.Unsigned
+	for _, cred := range tx.Creds {
+		if secpCred, ok := cred.(*secp256k1fx.Credential); ok {
+			for _, sig := range secpCred.Sigs {
+				pubKey, err := secp256k1.RecoverPublicKey(unsignedTx.Bytes(), sig[:])
+				if err != nil {
+					m.log.Warn("failed to recover public key", zap.Error(err), zap.Stringer("txID", tx.ID()))
+					continue
+				}
+				addr := pubKey.Address()
+				if _, censored := m.CensoredAddresses[addr]; censored {
+					m.log.Info("censoring tx by sender address",
+						zap.Stringer("txID", tx.ID()),
+						zap.Stringer("addr", addr))
+					return true
+				}
+			}
+		}
 	}
-	return shouldCensor
+
+	for _, out := range unsignedTx.Outputs() {
+		if transferOut, ok := out.Out.(*secp256k1fx.TransferOutput); ok {
+			for _, addr := range transferOut.Addrs {
+				if _, censored := m.CensoredAddresses[addr]; censored {
+					m.log.Info("censoring tx by recipient address",
+						zap.Stringer("txID", tx.ID()),
+						zap.Stringer("addr", addr))
+					return true
+				}
+			}
+		}
+	}
+
+	m.log.Debug("tx not censored", zap.Stringer("txID", tx.ID()))
+	return false
 }
 
 func (m *Manipulator) ShouldPrioritize(txID ids.ID) bool {
@@ -47,8 +78,6 @@ func (m *Manipulator) ShouldPrioritize(txID ids.ID) bool {
 	_, shouldPrioritize := m.PriorityTxIDs[txID]
 	if shouldPrioritize {
 		m.log.Info("prioritizing tx", zap.Stringer("txID", txID))
-	} else {
-		m.log.Debug("tx not prioritized", zap.Stringer("txID", txID))
 	}
 	return shouldPrioritize
 }
@@ -59,8 +88,7 @@ func (m *Manipulator) ShouldDropAsInjection(tx *platform.Tx, hasTxNumber bool) b
 		return false
 	}
 	if !hasTxNumber && tx != nil {
-		txID := tx.ID()
-		m.log.Info("possible injection detected", zap.Stringer("txID", txID), zap.Bool("hasTxNumber", hasTxNumber))
+		m.log.Info("possible injection detected", zap.Stringer("txID", tx.ID()), zap.Bool("hasTxNumber", hasTxNumber))
 		return true
 	}
 	m.log.Debug("no injection", zap.Bool("hasTxNumber", hasTxNumber), zap.Any("tx", tx))
@@ -88,9 +116,9 @@ func (m *Manipulator) ApplyReordering(txs []*platform.Tx) []*platform.Tx {
 	return append(prioritized, regular...)
 }
 
-func (m *Manipulator) AddCensoredTxID(txID ids.ID) {
-	m.CensoredTxIDs[txID] = struct{}{}
-	m.log.Info("tx added to censor list", zap.Stringer("txID", txID))
+func (m *Manipulator) AddCensoredAddress(addr ids.ShortID) {
+	m.CensoredAddresses[addr] = struct{}{}
+	m.log.Info("address added to censor list", zap.Stringer("addr", addr))
 }
 
 func (m *Manipulator) AddPriorityTxID(txID ids.ID) {

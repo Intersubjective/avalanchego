@@ -5,10 +5,12 @@ package platformvm
 
 import (
 	"context"
-	sjson "encoding/json"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/rpc/v2"
@@ -24,7 +26,7 @@ import (
 	"github.com/ava-labs/avalanchego/snow/consensus/snowman"
 	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/snow/uptime"
-	"github.com/ava-labs/avalanchego/utils/json"
+	ava_json "github.com/ava-labs/avalanchego/utils/json"
 
 	"github.com/ava-labs/avalanchego/snow/validators"
 	"github.com/ava-labs/avalanchego/utils"
@@ -119,26 +121,65 @@ func (vm *VM) Initialize(
 	}
 	chainCtx.Log.Info("using VM execution config", zap.Reflect("config", execConfig))
 
-	// parse settings for manipulation from configBytes
+	chainCtx.Log.Info("raw configBytes", zap.String("bytes", string(configBytes)))
+
 	var manipConfig struct {
 		Manipulation struct {
-			Enabled         bool     `json:"enabled"`
-			CensoredTxIDs   []string `json:"censored_tx_ids"`
-			PriorityTxIDs   []string `json:"priority_tx_ids"`
-			DetectInjection bool     `json:"detect_injection"`
+			Enabled           bool     `json:"enabled"`
+			CensoredAddresses []string `json:"censored_addresses"`
+			PriorityTxIDs     []string `json:"priority_tx_ids"`
+			DetectInjection   bool     `json:"detect_injection"`
 		} `json:"manipulation"`
 	}
-	if len(configBytes) > 0 {
-		if err := sjson.Unmarshal(configBytes, &manipConfig); err != nil {
+	if len(configBytes) == 0 {
+		var configFile string
+		for i, arg := range os.Args {
+			if strings.HasPrefix(arg, "--config-file=") {
+				configFile = strings.TrimPrefix(arg, "--config-file=")
+				break
+			} else if arg == "--config-file" && i+1 < len(os.Args) {
+				configFile = os.Args[i+1]
+				break
+			}
+		}
+		if configFile == "" {
+			chainCtx.Log.Warn("no config-file provided, manipulation will be disabled")
+		} else {
+			configData, err := os.ReadFile(configFile)
+			if err != nil {
+				return fmt.Errorf("failed to read config file %s: %w", configFile, err)
+			}
+			var fullConfig struct {
+				Vms struct {
+					PlatformVM struct {
+						Manipulation struct {
+							Enabled           bool     `json:"enabled"`
+							CensoredAddresses []string `json:"censored_addresses"`
+							PriorityTxIDs     []string `json:"priority_tx_ids"`
+							DetectInjection   bool     `json:"detect_injection"`
+						} `json:"manipulation"`
+					} `json:"platformvm"`
+				} `json:"vms"`
+			}
+			if err := json.Unmarshal(configData, &fullConfig); err != nil {
+				return fmt.Errorf("failed to parse config.json: %w", err)
+			}
+			manipConfig.Manipulation = fullConfig.Vms.PlatformVM.Manipulation
+		}
+	} else {
+		if err := json.Unmarshal(configBytes, &manipConfig); err != nil {
 			return fmt.Errorf("failed to parse configBytes: %w", err)
 		}
 	}
 
-	// Turn into JSON for InitGlobalConfig
-	manipConfigJSON, err := sjson.Marshal(manipConfig.Manipulation)
+	chainCtx.Log.Info("manipConfig after unmarshal", zap.Any("config", manipConfig))
+
+	manipConfigJSON, err := json.Marshal(manipConfig.Manipulation)
 	if err != nil {
 		return fmt.Errorf("failed to marshal manipulation config: %w", err)
 	}
+	chainCtx.Log.Info("manipConfigJSON", zap.String("json", string(manipConfigJSON)))
+
 	if err := manipulation.InitGlobalConfig(string(manipConfigJSON), chainCtx.Log); err != nil {
 		chainCtx.Log.Warn("Failed to initialize manipulation config", zap.Error(err))
 	}
@@ -148,7 +189,6 @@ func (vm *VM) Initialize(
 		return err
 	}
 
-	// Initialize metrics as soon as possible
 	vm.metrics, err = platformvmmetrics.New(registerer)
 	if err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
@@ -496,8 +536,8 @@ func (*VM) Version(context.Context) (string, error) {
 // * values are API handlers
 func (vm *VM) CreateHandlers(context.Context) (map[string]http.Handler, error) {
 	server := rpc.NewServer()
-	server.RegisterCodec(json.NewCodec(), "application/json")
-	server.RegisterCodec(json.NewCodec(), "application/json;charset=UTF-8")
+	server.RegisterCodec(ava_json.NewCodec(), "application/json")
+	server.RegisterCodec(ava_json.NewCodec(), "application/json;charset=UTF-8")
 	server.RegisterInterceptFunc(vm.metrics.InterceptRequest)
 	server.RegisterAfterFunc(vm.metrics.AfterRequest)
 	service := &Service{

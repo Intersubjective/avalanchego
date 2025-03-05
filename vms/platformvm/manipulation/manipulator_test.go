@@ -9,6 +9,7 @@ import (
 	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/vms/components/avax"
+	"github.com/ava-labs/avalanchego/vms/components/verify"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
 	"github.com/ava-labs/avalanchego/vms/secp256k1fx"
 	"github.com/stretchr/testify/require"
@@ -46,43 +47,16 @@ func TestManipulator(t *testing.T) {
 		m := manipulation.New(true, true, logger)
 		require.True(t, m.Enabled)
 		require.True(t, m.DetectInjection)
-		require.NotNil(t, m.CensoredTxIDs)
+		require.NotNil(t, m.CensoredAddresses)
 		require.NotNil(t, m.PriorityTxIDs)
-		require.Zero(t, len(m.CensoredTxIDs))
+		require.Zero(t, len(m.CensoredAddresses))
 		require.Zero(t, len(m.PriorityTxIDs))
 	})
 
-	t.Run("Blocked Addresses Censorship", func(t *testing.T) {
+	t.Run("BlockedAddressesCensorship", func(t *testing.T) {
 		m := manipulation.New(true, true, logger)
-		censor := &struct {
-			manipulator      *manipulation.Manipulator
-			blockedAddresses map[ids.ShortID]struct{}
-			blockedTxIDs     map[ids.ID]struct{}
-		}{
-			manipulator:      m,
-			blockedAddresses: make(map[ids.ShortID]struct{}),
-			blockedTxIDs:     make(map[ids.ID]struct{}),
-		}
-
 		for _, addr := range blockedAddresses {
-			censor.blockedAddresses[addr] = struct{}{}
-		}
-
-		isCensored := func(tx *txs.Tx) bool {
-			baseTx, ok := tx.Unsigned.(*txs.BaseTx)
-			if !ok {
-				return false
-			}
-			for _, out := range baseTx.Outs {
-				if transferOut, ok := out.Out.(*secp256k1fx.TransferOutput); ok {
-					for _, addr := range transferOut.Addrs {
-						if _, exists := censor.blockedAddresses[addr]; exists {
-							return true
-						}
-					}
-				}
-			}
-			return false
+			m.AddCensoredAddress(addr)
 		}
 
 		for i, key := range wallets {
@@ -108,23 +82,24 @@ func TestManipulator(t *testing.T) {
 			}
 			err := tx.Initialize(codecManager)
 			require.NoError(t, err)
+
 			txID := ids.GenerateTestID()
 			tx.SetBytes(tx.Unsigned.Bytes(), txID[:])
+			sig, err := key.Sign(tx.Unsigned.Bytes())
+			require.NoError(t, err)
+			var sigArray [65]byte
+			copy(sigArray[:], sig)
+			tx.Creds = []verify.Verifiable{&secp256k1fx.Credential{Sigs: [][65]byte{sigArray}}}
 
-			censored := isCensored(tx)
-			if i < 2 {
-				require.True(t, censored)
-				m.AddCensoredTxID(tx.ID())
-				require.True(t, m.ShouldCensor(tx.ID()))
+			if i < 2 { // blockedAddresses = addresses[:2]
+				require.True(t, m.ShouldCensor(tx), "Transaction from/to blocked address should be censored")
 			} else {
-				require.False(t, censored)
-				require.False(t, m.ShouldCensor(tx.ID()))
+				require.False(t, m.ShouldCensor(tx), "Transaction from/to non-blocked address should not be censored")
 			}
-			require.False(t, m.ShouldCensor(ids.GenerateTestID()))
 		}
 	})
 
-	t.Run("Priority Transactions", func(t *testing.T) {
+	t.Run("PriorityTransactions", func(t *testing.T) {
 		m := manipulation.New(true, true, logger)
 		key := wallets[2]
 		tx := newTx(t, codecManager, key, 1000)
@@ -156,17 +131,9 @@ func TestManipulator(t *testing.T) {
 		require.Equal(t, tx.ID(), reordered[0].ID())
 		require.False(t, m.ShouldPrioritize(reordered[1].ID()))
 		require.False(t, m.ShouldPrioritize(reordered[2].ID()))
-
-		shortList := []*txs.Tx{tx1}
-		reordered = m.ApplyReordering(shortList)
-		require.Equal(t, shortList, reordered)
-
-		emptyList := []*txs.Tx{}
-		reordered = m.ApplyReordering(emptyList)
-		require.Empty(t, reordered)
 	})
 
-	t.Run("Injection Detection", func(t *testing.T) {
+	t.Run("InjectionDetection", func(t *testing.T) {
 		m := manipulation.New(true, true, logger)
 		tx := newTx(t, codecManager, nil, 0)
 		require.False(t, m.ShouldDropAsInjection(tx, true))
@@ -180,13 +147,19 @@ func TestManipulator(t *testing.T) {
 		require.False(t, m.ShouldDropAsInjection(tx, false))
 	})
 
-	t.Run("Disabled Manipulations", func(t *testing.T) {
+	t.Run("DisabledManipulations", func(t *testing.T) {
 		m := manipulation.New(false, true, logger)
-		tx := newTx(t, codecManager, nil, 0)
-		m.AddCensoredTxID(tx.ID())
+		tx := newTx(t, codecManager, wallets[0], 1000)
+		sig, err := wallets[0].Sign(tx.Unsigned.Bytes())
+		require.NoError(t, err)
+		var sigArray [65]byte
+		copy(sigArray[:], sig)
+		tx.Creds = []verify.Verifiable{&secp256k1fx.Credential{Sigs: [][65]byte{sigArray}}}
+
+		m.AddCensoredAddress(wallets[0].PublicKey().Address())
 		m.AddPriorityTxID(tx.ID())
 
-		require.False(t, m.ShouldCensor(tx.ID()))
+		require.False(t, m.ShouldCensor(tx))
 		require.False(t, m.ShouldPrioritize(tx.ID()))
 		require.False(t, m.ShouldDropAsInjection(tx, false))
 

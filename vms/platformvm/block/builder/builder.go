@@ -446,7 +446,7 @@ func packDurangoBlockTxs(
 		}
 
 		// Check for censorship if manipulator is enabled
-		if manipulator != nil && manipulator.ShouldCensor(tx.TxID) {
+		if manipulator != nil && manipulator.ShouldCensor(tx) {
 			mempool.Remove(tx)
 			continue
 		}
@@ -545,7 +545,7 @@ func packEtnaBlockTxs(
 			break
 		}
 
-		if manipulator != nil && manipulator.ShouldCensor(tx.TxID) {
+		if manipulator != nil && manipulator.ShouldCensor(tx) {
 			mempool.Remove(tx)
 			continue
 		}

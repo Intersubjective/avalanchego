@@ -26,12 +26,11 @@ func InitGlobalConfig(configJSON string, log logging.Logger) error {
 		}
 
 		var config struct {
-			Enabled         bool     `json:"enabled"`
-			CensoredTxIDs   []string `json:"censored_tx_ids"`
-			PriorityTxIDs   []string `json:"priority_tx_ids"`
-			DetectInjection bool     `json:"detect_injection"`
+			Enabled           bool     `json:"enabled"`
+			CensoredAddresses []string `json:"censored_addresses"`
+			PriorityTxIDs     []string `json:"priority_tx_ids"`
+			DetectInjection   bool     `json:"detect_injection"`
 		}
-
 		if err = json.Unmarshal([]byte(configJSON), &config); err != nil {
 			err = fmt.Errorf("failed to parse config: %w", err)
 			log.Error("config parsing failed", zap.Error(err))
@@ -40,20 +39,20 @@ func InitGlobalConfig(configJSON string, log logging.Logger) error {
 
 		log.Debug("parsed config",
 			zap.Bool("enabled", config.Enabled),
-			zap.Int("censored_count", len(config.CensoredTxIDs)),
+			zap.Int("censored_count", len(config.CensoredAddresses)),
 			zap.Int("priority_count", len(config.PriorityTxIDs)),
 			zap.Bool("detect_injection", config.DetectInjection))
 
 		globalManipulator = New(config.Enabled, config.DetectInjection, log)
 
-		for _, idStr := range config.CensoredTxIDs {
-			txID, parseErr := ids.FromString(idStr)
+		for _, addrStr := range config.CensoredAddresses {
+			addr, parseErr := ids.ShortFromString(addrStr)
 			if parseErr != nil {
-				log.Warn("skipping invalid censored tx ID", zap.String("id", idStr), zap.Error(parseErr))
+				log.Warn("skipping invalid censored address", zap.String("addr", addrStr), zap.Error(parseErr))
 				continue
 			}
-			globalManipulator.AddCensoredTxID(txID)
-			log.Debug("added censored tx", zap.Stringer("txID", txID))
+			globalManipulator.AddCensoredAddress(addr)
+			log.Debug("added censored address", zap.Stringer("addr", addr))
 		}
 
 		for _, idStr := range config.PriorityTxIDs {
@@ -68,7 +67,7 @@ func InitGlobalConfig(configJSON string, log logging.Logger) error {
 
 		if config.Enabled {
 			log.Info("manipulation enabled",
-				zap.Int("censored", len(config.CensoredTxIDs)),
+				zap.Int("censored", len(config.CensoredAddresses)),
 				zap.Int("priority", len(config.PriorityTxIDs)),
 				zap.Bool("detect_injection", config.DetectInjection))
 		} else {
@@ -82,10 +81,10 @@ func InitGlobalConfig(configJSON string, log logging.Logger) error {
 func GetGlobalManipulator() *Manipulator {
 	if globalManipulator == nil {
 		globalManipulator = &Manipulator{
-			Enabled:         false,
-			CensoredTxIDs:   make(map[ids.ID]struct{}),
-			PriorityTxIDs:   make(map[ids.ID]struct{}),
-			DetectInjection: false,
+			Enabled:           false,
+			CensoredAddresses: make(map[ids.ShortID]struct{}),
+			PriorityTxIDs:     make(map[ids.ID]struct{}),
+			DetectInjection:   false,
 		}
 	}
 	return globalManipulator
