@@ -262,6 +262,15 @@ func (a *acceptor) standardBlock(b block.Block, blockType string) error {
 		zap.Stringer("utxoChecksum", a.state.Checksum()),
 	)
 
+	for _, tx := range b.Txs() {
+		txID := tx.ID()
+
+		a.ctx.Log.Info("Transaction accepted in block",
+			zap.Stringer("txID", txID),
+			zap.Stringer("blockID", blkID),
+		)
+	}
+
 	return nil
 }
 

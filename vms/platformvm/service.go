@@ -1434,6 +1434,14 @@ func (s *Service) IssueTx(_ *http.Request, args *api.FormattedTx, response *api.
 	}
 
 	response.TxID = tx.ID()
+	txID := tx.ID()
+	response.TxID = txID
+
+	txNum, exists := s.vm.GetTxNumber(txID)
+	if exists {
+		response.TxNum = txNum
+	}
+
 	return nil
 }
 

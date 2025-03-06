@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package mempool
@@ -8,9 +8,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
-
+	"github.com/ava-labs/avalanchego/vms/platformvm/txs/counter"
 	txmempool "github.com/ava-labs/avalanchego/vms/txs/mempool"
 )
 
@@ -30,12 +31,16 @@ type Mempool interface {
 	// a notification will only be sent if there is at least one transaction in
 	// the mempool.
 	RequestBuildBlock(emptyBlockPermitted bool)
+
+	// GetTxNumber returns the sequential number assigned to a transaction
+	GetTxNumber(txID ids.ID) (uint64, bool)
 }
 
 type mempool struct {
 	txmempool.Mempool[*txs.Tx]
 
-	toEngine chan<- common.Message
+	toEngine  chan<- common.Message
+	txCounter *counter.TxCounter
 }
 
 func New(
@@ -51,8 +56,9 @@ func New(
 		metrics,
 	)
 	return &mempool{
-		Mempool:  pool,
-		toEngine: toEngine,
+		Mempool:   pool,
+		toEngine:  toEngine,
+		txCounter: counter.New(),
 	}, nil
 }
 
@@ -65,7 +71,23 @@ func (m *mempool) Add(tx *txs.Tx) error {
 	default:
 	}
 
-	return m.Mempool.Add(tx)
+	err := m.Mempool.Add(tx)
+	if err != nil {
+		return err
+	}
+
+	txID := tx.ID()
+	m.txCounter.Increment(txID)
+
+	return nil
+}
+
+func (m *mempool) GetTxNumber(txID ids.ID) (uint64, bool) {
+	metadata, exists := m.txCounter.GetTxMetadata(txID)
+	if !exists {
+		return 0, false
+	}
+	return metadata.Number, true
 }
 
 func (m *mempool) RequestBuildBlock(emptyBlockPermitted bool) {
