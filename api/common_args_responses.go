@@ -19,7 +19,8 @@ type EmptyReply struct{}
 
 // JSONTxID contains the ID of a transaction
 type JSONTxID struct {
-	TxID ids.ID `json:"txID"`
+	TxID  ids.ID `json:"txID"`
+	TxNum uint64 `json:"txNum,omitempty"`
 }
 
 // JSONAddress contains an address

@@ -21,6 +21,7 @@ import (
 	"github.com/ava-labs/avalanchego/utils/units"
 	"github.com/ava-labs/avalanchego/vms/components/gas"
 	"github.com/ava-labs/avalanchego/vms/platformvm/block"
+	"github.com/ava-labs/avalanchego/vms/platformvm/manipulation"
 	"github.com/ava-labs/avalanchego/vms/platformvm/state"
 	"github.com/ava-labs/avalanchego/vms/platformvm/status"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
@@ -86,6 +87,7 @@ type builder struct {
 
 	txExecutorBackend *txexecutor.Backend
 	blkManager        blockexecutor.Manager
+	manipulator       *manipulation.Manipulator
 
 	// resetTimer is used to signal that the block builder timer should update
 	// when it will trigger building of a block.
@@ -98,11 +100,13 @@ func New(
 	mempool mempool.Mempool,
 	txExecutorBackend *txexecutor.Backend,
 	blkManager blockexecutor.Manager,
+	manipulator *manipulation.Manipulator,
 ) Builder {
 	return &builder{
 		Mempool:           mempool,
 		txExecutorBackend: txExecutorBackend,
 		blkManager:        blkManager,
+		manipulator:       manipulator,
 		resetTimer:        make(chan struct{}, 1),
 		closed:            make(chan struct{}),
 	}
@@ -299,6 +303,7 @@ func (b *builder) PackAllBlockTxs() ([]*txs.Tx, error) {
 			timestamp,
 			recommendedPChainHeight,
 			math.MaxInt,
+			manipulation.GetGlobalManipulator(),
 		)
 	}
 	return packEtnaBlockTxs(
@@ -311,6 +316,7 @@ func (b *builder) PackAllBlockTxs() ([]*txs.Tx, error) {
 		timestamp,
 		recommendedPChainHeight,
 		math.MaxUint64,
+		manipulation.GetGlobalManipulator(),
 	)
 }
 
@@ -329,6 +335,7 @@ func buildBlock(
 		blockTxs []*txs.Tx
 		err      error
 	)
+
 	if builder.txExecutorBackend.Config.UpgradeConfig.IsEtnaActivated(timestamp) {
 		blockTxs, err = packEtnaBlockTxs(
 			ctx,
@@ -340,6 +347,7 @@ func buildBlock(
 			timestamp,
 			pChainHeight,
 			0, // minCapacity is 0 as we want to honor the capacity in state.
+			builder.manipulator,
 		)
 	} else {
 		blockTxs, err = packDurangoBlockTxs(
@@ -352,6 +360,7 @@ func buildBlock(
 			timestamp,
 			pChainHeight,
 			targetBlockSize,
+			builder.manipulator,
 		)
 	}
 	if err != nil {
@@ -408,6 +417,7 @@ func packDurangoBlockTxs(
 	timestamp time.Time,
 	pChainHeight uint64,
 	remainingSize int,
+	manipulator *manipulation.Manipulator,
 ) ([]*txs.Tx, error) {
 	stateDiff, err := state.NewDiffOn(parentState)
 	if err != nil {
@@ -423,6 +433,8 @@ func packDurangoBlockTxs(
 		inputs        set.Set[ids.ID]
 		feeCalculator = state.PickFeeCalculator(backend.Config, stateDiff)
 	)
+
+	var validTxs []*txs.Tx
 	for {
 		tx, exists := mempool.Peek()
 		if !exists {
@@ -431,6 +443,19 @@ func packDurangoBlockTxs(
 		txSize := len(tx.Bytes())
 		if txSize > remainingSize {
 			break
+		}
+
+		// Check for censorship if manipulator is enabled
+		if manipulator != nil && manipulator.ShouldCensor(tx) {
+			mempool.Remove(tx)
+			continue
+		}
+
+		txID := tx.ID()
+		_, hasTxNumber := mempool.(interface{ GetTxNumber(ids.ID) (uint64, bool) }).GetTxNumber(txID)
+		if manipulator != nil && manipulator.ShouldDropAsInjection(tx, hasTxNumber) {
+			mempool.Remove(tx)
+			continue
 		}
 
 		shouldAdd, err := executeTx(
@@ -453,7 +478,14 @@ func packDurangoBlockTxs(
 		}
 
 		remainingSize -= txSize
-		blockTxs = append(blockTxs, tx)
+		validTxs = append(validTxs, tx)
+	}
+
+	// Apply reordering if manipulator is enabled
+	if manipulator != nil {
+		blockTxs = manipulator.ApplyReordering(validTxs)
+	} else {
+		blockTxs = validTxs
 	}
 
 	return blockTxs, nil
@@ -469,6 +501,7 @@ func packEtnaBlockTxs(
 	timestamp time.Time,
 	pChainHeight uint64,
 	minCapacity gas.Gas,
+	manipulator *manipulation.Manipulator,
 ) ([]*txs.Tx, error) {
 	stateDiff, err := state.NewDiffOn(parentState)
 	if err != nil {
@@ -483,7 +516,7 @@ func packEtnaBlockTxs(
 	capacity := max(feeState.Capacity, minCapacity)
 
 	var (
-		blockTxs        []*txs.Tx
+		validTxs        []*txs.Tx
 		inputs          set.Set[ids.ID]
 		blockComplexity gas.Dimensions
 		feeCalculator   = state.PickFeeCalculator(backend.Config, stateDiff)
@@ -495,6 +528,7 @@ func packEtnaBlockTxs(
 		zap.Uint64("capacity", uint64(capacity)),
 		zap.Int("mempoolLen", mempool.Len()),
 	)
+
 	for {
 		currentBlockGas, err := blockComplexity.ToGas(backend.Config.DynamicFeeConfig.Weights)
 		if err != nil {
@@ -506,9 +540,25 @@ func packEtnaBlockTxs(
 			backend.Ctx.Log.Debug("mempool is empty",
 				zap.Uint64("capacity", uint64(capacity)),
 				zap.Uint64("blockGas", uint64(currentBlockGas)),
-				zap.Int("blockLen", len(blockTxs)),
+				zap.Int("blockLen", len(validTxs)),
 			)
 			break
+		}
+
+		if manipulator != nil && manipulator.ShouldCensor(tx) {
+			mempool.Remove(tx)
+			continue
+		}
+
+		txID := tx.ID()
+		mempoolWithCounter, ok := mempool.(interface{ GetTxNumber(ids.ID) (uint64, bool) })
+		hasTxNumber := false
+		if ok {
+			_, hasTxNumber = mempoolWithCounter.GetTxNumber(txID)
+		}
+		if manipulator != nil && manipulator.ShouldDropAsInjection(tx, hasTxNumber) {
+			mempool.Remove(tx)
+			continue
 		}
 
 		txComplexity, err := fee.TxComplexity(tx.Unsigned)
@@ -528,7 +578,7 @@ func packEtnaBlockTxs(
 				zap.Uint64("nextBlockGas", uint64(newBlockGas)),
 				zap.Uint64("capacity", uint64(capacity)),
 				zap.Uint64("blockGas", uint64(currentBlockGas)),
-				zap.Int("blockLen", len(blockTxs)),
+				zap.Int("blockLen", len(validTxs)),
 			)
 			break
 		}
@@ -553,7 +603,14 @@ func packEtnaBlockTxs(
 		}
 
 		blockComplexity = newBlockComplexity
-		blockTxs = append(blockTxs, tx)
+		validTxs = append(validTxs, tx)
+	}
+
+	var blockTxs []*txs.Tx
+	if manipulator != nil && len(validTxs) > 0 {
+		blockTxs = manipulator.ApplyReordering(validTxs)
+	} else {
+		blockTxs = validTxs
 	}
 
 	return blockTxs, nil
