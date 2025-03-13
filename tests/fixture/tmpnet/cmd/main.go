@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -48,7 +47,7 @@ func main() {
 			if len(version.GitCommit) > 0 {
 				msg += ", commit=" + version.GitCommit
 			}
-			fmt.Fprintf(os.Stdout, msg+"\n")
+			fmt.Fprintln(os.Stdout, msg)
 			return nil
 		},
 	}
@@ -81,10 +80,7 @@ func main() {
 				Nodes: tmpnet.NewNodesOrPanic(int(nodeCount)),
 			}
 
-			// Extreme upper bound, should never take this long
-			networkStartTimeout := 2 * time.Minute
-
-			ctx, cancel := context.WithTimeout(context.Background(), networkStartTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), tmpnet.DefaultNetworkTimeout)
 			defer cancel()
 			if err := tmpnet.BootstrapNewNetwork(
 				ctx,
@@ -117,9 +113,15 @@ func main() {
 			return nil
 		},
 	}
+	// TODO(marun) Enable reuse of flags across tmpnetctl and e2e
 	startNetworkCmd.PersistentFlags().StringVar(&rootDir, "root-dir", os.Getenv(tmpnet.RootDirEnvName), "The path to the root directory for temporary networks")
 	startNetworkCmd.PersistentFlags().StringVar(&avalancheGoPath, "avalanchego-path", os.Getenv(tmpnet.AvalancheGoPathEnvName), "The path to an avalanchego binary")
-	startNetworkCmd.PersistentFlags().StringVar(&pluginDir, "plugin-dir", os.ExpandEnv("$HOME/.avalanchego/plugins"), "[optional] the dir containing VM plugins")
+	startNetworkCmd.PersistentFlags().StringVar(
+		&pluginDir,
+		"plugin-dir",
+		tmpnet.GetEnvWithDefault(tmpnet.AvalancheGoPluginDirEnvName, os.ExpandEnv("$HOME/.avalanchego/plugins")),
+		"[optional] the dir containing VM plugins",
+	)
 	startNetworkCmd.PersistentFlags().Uint8Var(&nodeCount, "node-count", tmpnet.DefaultNodeCount, "Number of nodes the network should initially consist of")
 	startNetworkCmd.PersistentFlags().StringVar(&networkOwner, "network-owner", "", "The string identifying the intended owner of the network")
 	rootCmd.AddCommand(startNetworkCmd)
@@ -159,6 +161,80 @@ func main() {
 		},
 	}
 	rootCmd.AddCommand(restartNetworkCmd)
+
+	startCollectorsCmd := &cobra.Command{
+		Use:   "start-collectors",
+		Short: "Start log and metric collectors for local process-based nodes",
+		RunE: func(*cobra.Command, []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), tmpnet.DefaultNetworkTimeout)
+			defer cancel()
+			log, err := tests.LoggerForFormat("", rawLogFormat)
+			if err != nil {
+				return err
+			}
+			return tmpnet.StartCollectors(ctx, log)
+		},
+	}
+	rootCmd.AddCommand(startCollectorsCmd)
+
+	stopCollectorsCmd := &cobra.Command{
+		Use:   "stop-collectors",
+		Short: "Stop log and metric collectors for local process-based nodes",
+		RunE: func(*cobra.Command, []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), tmpnet.DefaultNetworkTimeout)
+			defer cancel()
+			log, err := tests.LoggerForFormat("", rawLogFormat)
+			if err != nil {
+				return err
+			}
+			return tmpnet.StopCollectors(ctx, log)
+		},
+	}
+	rootCmd.AddCommand(stopCollectorsCmd)
+
+	var networkUUID string
+
+	checkMetricsCmd := &cobra.Command{
+		Use:   "check-metrics",
+		Short: "Checks whether the default prometheus server has the expected metrics",
+		RunE: func(*cobra.Command, []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), tmpnet.DefaultNetworkTimeout)
+			defer cancel()
+			log, err := tests.LoggerForFormat("", rawLogFormat)
+			if err != nil {
+				return err
+			}
+			return tmpnet.CheckMetricsExist(ctx, log, networkUUID)
+		},
+	}
+	checkMetricsCmd.PersistentFlags().StringVar(
+		&networkUUID,
+		"network-uuid",
+		"",
+		"[optional] The network UUID to check metrics for. Labels read from GH_* env vars will always be used.",
+	)
+	rootCmd.AddCommand(checkMetricsCmd)
+
+	checkLogsCmd := &cobra.Command{
+		Use:   "check-logs",
+		Short: "Checks whether the default loki server has the expected logs",
+		RunE: func(*cobra.Command, []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), tmpnet.DefaultNetworkTimeout)
+			defer cancel()
+			log, err := tests.LoggerForFormat("", rawLogFormat)
+			if err != nil {
+				return err
+			}
+			return tmpnet.CheckLogsExist(ctx, log, networkUUID)
+		},
+	}
+	checkLogsCmd.PersistentFlags().StringVar(
+		&networkUUID,
+		"network-uuid",
+		"",
+		"[optional] The network UUID to check logs for. Labels read from GH_* env vars will always be used.",
+	)
+	rootCmd.AddCommand(checkLogsCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "tmpnetctl failed: %v\n", err)
