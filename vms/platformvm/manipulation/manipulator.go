@@ -12,7 +12,7 @@ import (
 type Manipulator struct {
 	Enabled           bool
 	CensoredAddresses map[ids.ShortID]struct{}
-	PriorityTxIDs     map[ids.ID]struct{}
+	PriorityAddresses map[ids.ShortID]struct{}
 	DetectInjection   bool
 	log               logging.Logger
 }
@@ -21,7 +21,7 @@ func New(enabled, detectInjection bool, log logging.Logger) *Manipulator {
 	return &Manipulator{
 		Enabled:           enabled,
 		CensoredAddresses: make(map[ids.ShortID]struct{}),
-		PriorityTxIDs:     make(map[ids.ID]struct{}),
+		PriorityAddresses: make(map[ids.ShortID]struct{}),
 		DetectInjection:   detectInjection,
 		log:               log,
 	}
@@ -70,16 +70,33 @@ func (m *Manipulator) ShouldCensor(tx *platform.Tx) bool {
 	return false
 }
 
-func (m *Manipulator) ShouldPrioritize(txID ids.ID) bool {
+func (m *Manipulator) ShouldPrioritize(tx *platform.Tx) bool {
 	if !m.Enabled {
-		m.log.Debug("manipulator off, no priority check", zap.Stringer("txID", txID))
+		m.log.Debug("manipulator off, no priority check", zap.Stringer("txID", tx.ID()))
 		return false
 	}
-	_, shouldPrioritize := m.PriorityTxIDs[txID]
-	if shouldPrioritize {
-		m.log.Info("prioritizing tx", zap.Stringer("txID", txID))
+
+	unsignedTx := tx.Unsigned
+	for _, cred := range tx.Creds {
+		if secpCred, ok := cred.(*secp256k1fx.Credential); ok {
+			for _, sig := range secpCred.Sigs {
+				pubKey, err := secp256k1.RecoverPublicKey(unsignedTx.Bytes(), sig[:])
+				if err != nil {
+					m.log.Warn("failed to recover public key", zap.Error(err), zap.Stringer("txID", tx.ID()))
+					continue
+				}
+				addr := pubKey.Address()
+				if _, prioritized := m.PriorityAddresses[addr]; prioritized {
+					m.log.Info("prioritizing tx by sender address",
+						zap.Stringer("txID", tx.ID()),
+						zap.Stringer("addr", addr))
+					return true
+				}
+			}
+		}
 	}
-	return shouldPrioritize
+
+	return false
 }
 
 func (m *Manipulator) ShouldDropAsInjection(tx *platform.Tx, hasTxNumber bool) bool {
@@ -103,25 +120,24 @@ func (m *Manipulator) ApplyReordering(txs []*platform.Tx) []*platform.Tx {
 
 	var prioritized, regular []*platform.Tx
 	for _, tx := range txs {
-		txID := tx.ID()
-		if m.ShouldPrioritize(txID) {
+		if m.ShouldPrioritize(tx) {
 			prioritized = append(prioritized, tx)
-			m.log.Debug("tx prioritized", zap.Stringer("txID", txID))
+			m.log.Debug("tx prioritized", zap.Stringer("txID", tx.ID()))
 		} else {
 			regular = append(regular, tx)
-			m.log.Debug("tx regular", zap.Stringer("txID", txID))
+			m.log.Debug("tx regular", zap.Stringer("txID", tx.ID()))
 		}
 	}
 	m.log.Info("txs reordered", zap.Int("prioritized", len(prioritized)), zap.Int("regular", len(regular)))
 	return append(prioritized, regular...)
 }
 
+func (m *Manipulator) AddPriorityAddress(addr ids.ShortID) {
+	m.PriorityAddresses[addr] = struct{}{}
+	m.log.Info("address added to priority list", zap.Stringer("addr", addr))
+}
+
 func (m *Manipulator) AddCensoredAddress(addr ids.ShortID) {
 	m.CensoredAddresses[addr] = struct{}{}
 	m.log.Info("address added to censor list", zap.Stringer("addr", addr))
-}
-
-func (m *Manipulator) AddPriorityTxID(txID ids.ID) {
-	m.PriorityTxIDs[txID] = struct{}{}
-	m.log.Info("tx added to priority list", zap.Stringer("txID", txID))
 }

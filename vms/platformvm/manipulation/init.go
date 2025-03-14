@@ -3,10 +3,12 @@ package manipulation
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/logging"
+	"github.com/btcsuite/btcutil/bech32"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +30,7 @@ func InitGlobalConfig(configJSON string, log logging.Logger) error {
 		var config struct {
 			Enabled           bool     `json:"enabled"`
 			CensoredAddresses []string `json:"censored_addresses"`
-			PriorityTxIDs     []string `json:"priority_tx_ids"`
+			PriorityAddresses []string `json:"priority_tx_ids"`
 			DetectInjection   bool     `json:"detect_injection"`
 		}
 		if err = json.Unmarshal([]byte(configJSON), &config); err != nil {
@@ -40,35 +42,132 @@ func InitGlobalConfig(configJSON string, log logging.Logger) error {
 		log.Debug("parsed config",
 			zap.Bool("enabled", config.Enabled),
 			zap.Int("censored_count", len(config.CensoredAddresses)),
-			zap.Int("priority_count", len(config.PriorityTxIDs)),
+			zap.Int("priority_count", len(config.PriorityAddresses)),
 			zap.Bool("detect_injection", config.DetectInjection))
 
 		globalManipulator = New(config.Enabled, config.DetectInjection, log)
 
 		for _, addrStr := range config.CensoredAddresses {
-			addr, parseErr := ids.ShortFromString(addrStr)
+			originalAddr := addrStr
+			cleanAddr := strings.TrimPrefix(addrStr, "P-")
+			cleanAddr = strings.TrimSpace(cleanAddr)
+
+			log.Debug("processing address",
+				zap.String("original", originalAddr),
+				zap.String("cleaned", cleanAddr),
+				zap.Int("length", len(cleanAddr)))
+
+			hrp, fiveBitData, parseErr := bech32.Decode(cleanAddr)
 			if parseErr != nil {
-				log.Warn("skipping invalid censored address", zap.String("addr", addrStr), zap.Error(parseErr))
+				log.Warn("skipping invalid censored address",
+					zap.String("addr", originalAddr),
+					zap.String("cleaned", cleanAddr),
+					zap.Error(parseErr))
 				continue
 			}
-			globalManipulator.AddCensoredAddress(addr)
-			log.Debug("added censored address", zap.Stringer("addr", addr))
+
+			if hrp != "avax" {
+				log.Warn("skipping address with invalid HRP",
+					zap.String("addr", originalAddr),
+					zap.String("hrp", hrp),
+					zap.String("expected", "avax"))
+				continue
+			}
+
+			addrBytes, convErr := bech32.ConvertBits(fiveBitData, 5, 8, true)
+			if convErr != nil {
+				log.Warn("skipping address due to conversion error",
+					zap.String("addr", originalAddr),
+					zap.Error(convErr))
+				continue
+			}
+
+			if len(addrBytes) != ids.ShortIDLen {
+				log.Warn("skipping address with invalid length",
+					zap.String("addr", originalAddr),
+					zap.Int("length", len(addrBytes)),
+					zap.Int("expected", ids.ShortIDLen))
+				continue
+			}
+
+			shortID, err := ids.ToShortID(addrBytes)
+			if err != nil {
+				log.Warn("skipping invalid short ID",
+					zap.String("addr", originalAddr),
+					zap.Error(err))
+				continue
+			}
+
+			globalManipulator.AddCensoredAddress(shortID)
+			log.Info("added censored address",
+				zap.String("original_addr", originalAddr),
+				zap.Stringer("addr", shortID))
 		}
 
-		for _, idStr := range config.PriorityTxIDs {
-			txID, parseErr := ids.FromString(idStr)
+		for _, addrStr := range config.PriorityAddresses {
+			originalAddr := addrStr
+			cleanAddr := strings.TrimPrefix(addrStr, "P-")
+			cleanAddr = strings.TrimSpace(cleanAddr)
+
+			log.Debug("processing priority address",
+				zap.String("original", originalAddr),
+				zap.String("cleaned", cleanAddr),
+				zap.Int("length", len(cleanAddr)))
+
+			hrp, fiveBitData, parseErr := bech32.Decode(cleanAddr)
 			if parseErr != nil {
-				log.Warn("skipping invalid priority tx ID", zap.String("id", idStr), zap.Error(parseErr))
+				log.Warn("skipping invalid priority address",
+					zap.String("addr", originalAddr),
+					zap.String("cleaned", cleanAddr),
+					zap.Error(parseErr))
 				continue
 			}
-			globalManipulator.AddPriorityTxID(txID)
-			log.Debug("added priority tx", zap.Stringer("txID", txID))
+
+			if hrp != "avax" {
+				log.Warn("skipping address with invalid HRP",
+					zap.String("addr", originalAddr),
+					zap.String("hrp", hrp),
+					zap.String("expected", "avax"))
+				continue
+			}
+
+			addrBytes, convErr := bech32.ConvertBits(fiveBitData, 5, 8, true)
+			if convErr != nil {
+				log.Warn("skipping address due to conversion error",
+					zap.String("addr", originalAddr),
+					zap.Error(convErr))
+				continue
+			}
+
+			if len(addrBytes) != ids.ShortIDLen {
+				log.Warn("skipping address with invalid length",
+					zap.String("addr", originalAddr),
+					zap.Int("length", len(addrBytes)),
+					zap.Int("expected", ids.ShortIDLen))
+				continue
+			}
+
+			shortID, err := ids.ToShortID(addrBytes)
+			if err != nil {
+				log.Warn("skipping invalid short ID",
+					zap.String("addr", originalAddr),
+					zap.Error(err))
+				continue
+			}
+
+			globalManipulator.AddPriorityAddress(shortID)
+			log.Info("added priority address",
+				zap.String("original_addr", originalAddr),
+				zap.Stringer("addr", shortID))
 		}
+
+		censoredCount := len(globalManipulator.CensoredAddresses)
+		priorityCount := len(globalManipulator.PriorityAddresses)
 
 		if config.Enabled {
 			log.Info("manipulation enabled",
-				zap.Int("censored", len(config.CensoredAddresses)),
-				zap.Int("priority", len(config.PriorityTxIDs)),
+				zap.Int("censored", censoredCount),
+				zap.Int("priority", priorityCount),
 				zap.Bool("detect_injection", config.DetectInjection))
 		} else {
 			log.Info("manipulation disabled")
@@ -83,7 +182,7 @@ func GetGlobalManipulator() *Manipulator {
 		globalManipulator = &Manipulator{
 			Enabled:           false,
 			CensoredAddresses: make(map[ids.ShortID]struct{}),
-			PriorityTxIDs:     make(map[ids.ID]struct{}),
+			PriorityAddresses: make(map[ids.ShortID]struct{}),
 			DetectInjection:   false,
 		}
 	}

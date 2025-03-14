@@ -48,9 +48,9 @@ func TestManipulator(t *testing.T) {
 		require.True(t, m.Enabled)
 		require.True(t, m.DetectInjection)
 		require.NotNil(t, m.CensoredAddresses)
-		require.NotNil(t, m.PriorityTxIDs)
+		require.NotNil(t, m.PriorityAddresses)
 		require.Zero(t, len(m.CensoredAddresses))
-		require.Zero(t, len(m.PriorityTxIDs))
+		require.Zero(t, len(m.PriorityAddresses))
 	})
 
 	t.Run("BlockedAddressesCensorship", func(t *testing.T) {
@@ -91,7 +91,7 @@ func TestManipulator(t *testing.T) {
 			copy(sigArray[:], sig)
 			tx.Creds = []verify.Verifiable{&secp256k1fx.Credential{Sigs: [][65]byte{sigArray}}}
 
-			if i < 2 { // blockedAddresses = addresses[:2]
+			if i < 2 {
 				require.True(t, m.ShouldCensor(tx), "Transaction from/to blocked address should be censored")
 			} else {
 				require.False(t, m.ShouldCensor(tx), "Transaction from/to non-blocked address should not be censored")
@@ -102,35 +102,50 @@ func TestManipulator(t *testing.T) {
 	t.Run("PriorityTransactions", func(t *testing.T) {
 		m := manipulation.New(true, true, logger)
 		key := wallets[2]
+		addr := key.PublicKey().Address()
+
+		m.AddPriorityAddress(addr)
+
 		tx := newTx(t, codecManager, key, 1000)
-		m.AddPriorityTxID(tx.ID())
-		require.True(t, m.ShouldPrioritize(tx.ID()))
-		require.False(t, m.ShouldPrioritize(ids.GenerateTestID()))
+		sig, err := key.Sign(tx.Unsigned.Bytes())
+		require.NoError(t, err)
+		var sigArray [65]byte
+		copy(sigArray[:], sig)
+		tx.Creds = []verify.Verifiable{&secp256k1fx.Credential{Sigs: [][65]byte{sigArray}}}
 
-		tx1 := newTx(t, codecManager, nil, 0)
-		tx2 := newTx(t, codecManager, nil, 0)
-		tx3 := newTx(t, codecManager, nil, 0)
+		tx1 := newTx(t, codecManager, wallets[0], 1000)
+		sig1, err := wallets[0].Sign(tx1.Unsigned.Bytes())
+		require.NoError(t, err)
+		var sigArray1 [65]byte
+		copy(sigArray1[:], sig1)
+		tx1.Creds = []verify.Verifiable{&secp256k1fx.Credential{Sigs: [][65]byte{sigArray1}}}
 
-		m.AddPriorityTxID(tx1.ID())
-		m.AddPriorityTxID(tx2.ID())
+		tx2 := newTx(t, codecManager, wallets[1], 1000)
+		sig2, err := wallets[1].Sign(tx2.Unsigned.Bytes())
+		require.NoError(t, err)
+		var sigArray2 [65]byte
+		copy(sigArray2[:], sig2)
+		tx2.Creds = []verify.Verifiable{&secp256k1fx.Credential{Sigs: [][65]byte{sigArray2}}}
+
+		require.True(t, m.ShouldPrioritize(tx), "Transaction from priority address should be prioritized")
+		require.False(t, m.ShouldPrioritize(tx1), "Transaction from non-priority address shouldn't be prioritized")
+
 		txsList := []*txs.Tx{tx1, tx2, tx}
 		reordered := m.ApplyReordering(txsList)
 		require.Equal(t, 3, len(reordered))
-		require.True(t, m.ShouldPrioritize(reordered[0].ID()))
-		require.True(t, m.ShouldPrioritize(reordered[1].ID()))
-		require.True(t, m.ShouldPrioritize(reordered[2].ID()))
 
-		m = manipulation.New(true, true, logger)
-		txsList = []*txs.Tx{tx1, tx2, tx3}
-		reordered = m.ApplyReordering(txsList)
-		require.Equal(t, txsList, reordered)
+		require.Equal(t, tx.ID(), reordered[0].ID(), "Transaction from priority address should be first")
 
-		txsList = []*txs.Tx{tx1, tx, tx3}
-		m.AddPriorityTxID(tx.ID())
+		m.AddPriorityAddress(wallets[0].PublicKey().Address())
+
 		reordered = m.ApplyReordering(txsList)
-		require.Equal(t, tx.ID(), reordered[0].ID())
-		require.False(t, m.ShouldPrioritize(reordered[1].ID()))
-		require.False(t, m.ShouldPrioritize(reordered[2].ID()))
+		require.Equal(t, 3, len(reordered))
+
+		prioritizedIDs := []ids.ID{reordered[0].ID(), reordered[1].ID()}
+		require.Contains(t, prioritizedIDs, tx.ID(), "Transaction from priority address should be among first two")
+		require.Contains(t, prioritizedIDs, tx1.ID(), "Transaction from priority address should be among first two")
+
+		require.Equal(t, tx2.ID(), reordered[2].ID(), "Transaction from non-priority address should be last")
 	})
 
 	t.Run("InjectionDetection", func(t *testing.T) {
@@ -157,10 +172,10 @@ func TestManipulator(t *testing.T) {
 		tx.Creds = []verify.Verifiable{&secp256k1fx.Credential{Sigs: [][65]byte{sigArray}}}
 
 		m.AddCensoredAddress(wallets[0].PublicKey().Address())
-		m.AddPriorityTxID(tx.ID())
+		m.AddPriorityAddress(wallets[0].PublicKey().Address())
 
 		require.False(t, m.ShouldCensor(tx))
-		require.False(t, m.ShouldPrioritize(tx.ID()))
+		require.False(t, m.ShouldPrioritize(tx))
 		require.False(t, m.ShouldDropAsInjection(tx, false))
 
 		txsList := []*txs.Tx{tx}
